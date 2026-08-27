@@ -585,21 +585,27 @@ $(DIST_DIR):
 # Fragments
 $(NIX_OBJ_DIRS): | $(NIX_BUILD_DIR)
 	mkdir -p $@
-$(NIX_BUILD_DIR)/test/%.o: %.c* $(HDR) $(TEST_HDR) | $(NIX_OBJ_DIRS)
+$(NIX_BUILD_DIR)/lib/fmt/src/format.o: lib/fmt/src/format.cc $(HDR) | $(NIX_OBJ_DIRS)
 	$(CXX) -std=c++1z $(INCLUDE_DIRS) $(NIX_CPP_FLAGS) `sdl2-config --cflags` -c $< -o $@
-$(NIX_BUILD_DIR)/%.o: %.c* $(HDR) | $(NIX_OBJ_DIRS)
+$(NIX_BUILD_DIR)/test/%.o: %.cpp $(HDR) $(TEST_HDR) | $(NIX_OBJ_DIRS)
+	$(CXX) -std=c++1z $(INCLUDE_DIRS) $(NIX_CPP_FLAGS) `sdl2-config --cflags` -c $< -o $@
+$(NIX_BUILD_DIR)/%.o: %.cpp $(HDR) | $(NIX_OBJ_DIRS)
 	$(CXX) -std=c++1z $(INCLUDE_DIRS) $(NIX_CPP_FLAGS) `sdl2-config --cflags` -c $< -o $@
 $(WIN32_OBJ_DIRS): | $(WIN32_BUILD_DIR)
 	mkdir -p $@
-$(WIN32_BUILD_DIR)/test/%.o: %.c* $(HDR) $(TEST_HDR) | $(WIN32_OBJ_DIRS)
+$(WIN32_BUILD_DIR)/lib/fmt/src/format.o: lib/fmt/src/format.cc $(HDR) | $(WIN32_OBJ_DIRS)
 	$(WIN32CPP) -std=c++17 $(INCLUDE_DIRS) $(WIN32_INCLUDE_DIRS) $(WIN32_CPP_FLAGS) -D_REENTRANT -c $< -o $@
-$(WIN32_BUILD_DIR)/%.o: %.c* $(HDR) | $(WIN32_OBJ_DIRS)
+$(WIN32_BUILD_DIR)/test/%.o: %.cpp $(HDR) $(TEST_HDR) | $(WIN32_OBJ_DIRS)
+	$(WIN32CPP) -std=c++17 $(INCLUDE_DIRS) $(WIN32_INCLUDE_DIRS) $(WIN32_CPP_FLAGS) -D_REENTRANT -c $< -o $@
+$(WIN32_BUILD_DIR)/%.o: %.cpp $(HDR) | $(WIN32_OBJ_DIRS)
 	$(WIN32CPP) -std=c++17 $(INCLUDE_DIRS) $(WIN32_INCLUDE_DIRS) $(WIN32_CPP_FLAGS) -D_REENTRANT -c $< -o $@
 $(WIN64_OBJ_DIRS): | $(WIN64_BUILD_DIR)
 	mkdir -p $@
-$(WIN64_BUILD_DIR)/test/%.o: %.c* $(HDR) $(TEST_HDR) | $(WIN64_OBJ_DIRS)
+$(WIN64_BUILD_DIR)/lib/fmt/src/format.o: lib/fmt/src/format.cc $(HDR) | $(WIN64_OBJ_DIRS)
 	$(WIN64CPP) -std=c++17 $(INCLUDE_DIRS) $(WIN64_INCLUDE_DIRS) $(WIN64_CPP_FLAGS) -D_REENTRANT -c $< -o $@
-$(WIN64_BUILD_DIR)/%.o: %.c* $(HDR) | $(WIN64_OBJ_DIRS)
+$(WIN64_BUILD_DIR)/test/%.o: %.cpp $(HDR) $(TEST_HDR) | $(WIN64_OBJ_DIRS)
+	$(WIN64CPP) -std=c++17 $(INCLUDE_DIRS) $(WIN64_INCLUDE_DIRS) $(WIN64_CPP_FLAGS) -D_REENTRANT -c $< -o $@
+$(WIN64_BUILD_DIR)/%.o: %.cpp $(HDR) | $(WIN64_OBJ_DIRS)
 	$(WIN64CPP) -std=c++17 $(INCLUDE_DIRS) $(WIN64_INCLUDE_DIRS) $(WIN64_CPP_FLAGS) -D_REENTRANT -c $< -o $@
 
 # Avoid detection/auto-cleanup of intermediates
@@ -642,4 +648,3 @@ clean:
 ifdef IS_OSX
 	./macosx/bundle_macosx_app.sh --clear-thirdparty-dirs
 endif
-
