@@ -1,7 +1,7 @@
 #include "trackerview.h"
-#include <cerrno>
+#include <algorithm>
 #include <cmath>
-#include <cstdlib>
+#include <limits>
 #include <string>
 #include <vector>
 #include <fmt/format.h>
@@ -31,7 +31,7 @@ constexpr int TOOL_MAX_DISPLACEMENT=5; // can be off by this amount
 
 enum class MapMarkerHintAction {
     INVALID,
-    CLEAR,
+    REMOVE,
     SET,
 };
 
@@ -40,44 +40,91 @@ struct MapMarkerHint {
     std::string id;
     float x = 0.0f;
     float y = 0.0f;
+    MapWidget::MarkerAppearance appearance;
 };
 
-static bool parseMapMarkerCoordinate(const std::string& field, float& result)
+static bool parseMapMarkerCoordinate(const nlohmann::json& field, float& result)
 {
-    if (field.empty())
+    if (!field.is_number())
+        return false;
+    const double number = field.get<double>();
+    if (!std::isfinite(number) || number < -std::numeric_limits<float>::max() ||
+            number > std::numeric_limits<float>::max())
+        return false;
+    result = static_cast<float>(number);
+    return std::isfinite(result);
+}
+
+static bool parseMapMarkerPosition(const nlohmann::json& json, float& x, float& y)
+{
+    const auto xValue = json.find("x");
+    const auto yValue = json.find("y");
+    return xValue != json.end() && yValue != json.end() &&
+        parseMapMarkerCoordinate(*xValue, x) && parseMapMarkerCoordinate(*yValue, y);
+}
+
+static bool isMapMarkerColor(const std::string& color)
+{
+    if (color.size() != 7 && color.size() != 9)
+        return false;
+    return color.front() == '#' && std::all_of(color.begin() + 1, color.end(), [](const unsigned char c) {
+        return std::isxdigit(c) != 0;
+    });
+}
+
+static bool parseMapMarkerAppearance(const nlohmann::json& json, MapWidget::MarkerAppearance& result)
+{
+    const auto appearance = json.find("appearance");
+    if (appearance == json.end())
+        return true;
+    if (!appearance->is_object())
         return false;
 
-    errno = 0;
-    char* end = nullptr;
-    const float value = std::strtof(field.c_str(), &end);
-    if (end == field.c_str() || *end != '\0' || errno == ERANGE || !std::isfinite(value))
+    const auto type = appearance->find("type");
+    if (type == appearance->end() || !type->is_string() || type->get<std::string>() != "diamond")
         return false;
 
-    result = value;
+    const auto color = appearance->find("color");
+    if (color == appearance->end())
+        return true;
+    if (!color->is_string() || !isMapMarkerColor(color->get_ref<const std::string&>()))
+        return false;
+    result.color = Widget::Color(color->get<std::string>());
     return true;
 }
 
 static MapMarkerHint parseMapMarkerHint(const std::string& value)
 {
-    const size_t firstComma = value.find(',');
-    if (firstComma == std::string::npos)
-        return value.empty() ? MapMarkerHint{} : MapMarkerHint{MapMarkerHintAction::CLEAR, value};
+    try {
+        const auto json = nlohmann::json::parse(value, nullptr, false);
+        if (json.is_discarded() || !json.is_object())
+            return {};
 
-    const size_t secondComma = value.find(',', firstComma + 1);
-    if (firstComma == 0 || secondComma == std::string::npos ||
-            value.find(',', secondComma + 1) != std::string::npos) {
+        const auto id = json.find("id");
+        if (id == json.end() || !id->is_string() || id->get_ref<const std::string&>().empty())
+            return {};
+
+        MapMarkerHint hint;
+        hint.id = id->get<std::string>();
+
+        const auto remove = json.find("remove");
+        if (remove != json.end()) {
+            if (!remove->is_boolean() || !remove->get<bool>() || json.count("x") || json.count("y") ||
+                    json.count("appearance"))
+                return {};
+            hint.action = MapMarkerHintAction::REMOVE;
+            return hint;
+        }
+
+        if (!parseMapMarkerPosition(json, hint.x, hint.y) ||
+                !parseMapMarkerAppearance(json, hint.appearance))
+            return {};
+
+        hint.action = MapMarkerHintAction::SET;
+        return hint;
+    } catch (...) {
         return {};
     }
-
-    MapMarkerHint hint;
-    hint.id = value.substr(0, firstComma);
-    if (!parseMapMarkerCoordinate(value.substr(firstComma + 1, secondComma - firstComma - 1), hint.x) ||
-        !parseMapMarkerCoordinate(value.substr(secondComma + 1), hint.y)) {
-        return {};
-    }
-
-    hint.action = MapMarkerHintAction::SET;
-    return hint;
 }
 
 static std::list<ImageFilter> imageModsToFilters(const Tracker* tracker, const std::list<std::string>& mods)
@@ -1013,8 +1060,8 @@ bool TrackerView::addLayoutNode(Container* container, const LayoutNode& node, si
                         (name.substr(10) == mapname || name.substr(10) == numberedMapName)) {
                     const MapMarkerHint hint = parseMapMarkerHint(value);
                     if (hint.action == MapMarkerHintAction::SET) {
-                        w->setMarker(hint.id, hint.x, hint.y);
-                    } else if (hint.action == MapMarkerHintAction::CLEAR) {
+                        w->setMarker(hint.id, hint.x, hint.y, hint.appearance);
+                    } else if (hint.action == MapMarkerHintAction::REMOVE) {
                         w->clearMarker(hint.id);
                     }
                 }
