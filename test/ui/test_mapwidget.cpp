@@ -1,6 +1,8 @@
 #include <algorithm>
+#include <chrono>
 #include <cstdlib>
 #include <string>
+#include <thread>
 #include <vector>
 #include <gtest/gtest.h>
 
@@ -13,6 +15,7 @@ namespace {
 
 constexpr char IMAGE_PATH[] = "examples/zoom-pan-test/images/map.png";
 constexpr char PACK_PATH[] = "examples/zoom-pan-test";
+constexpr char ICON_PACK_PATH[] = "examples/template_pack";
 constexpr int SURFACE_WIDTH = 240;
 constexpr int SURFACE_HEIGHT = 120;
 
@@ -103,6 +106,18 @@ Bounds differenceBounds(const std::string& before, const std::string& after, con
     return bounds;
 }
 
+std::string renderUntilDifferent(SoftwareRenderer& output, Ui::MapWidget& widget, const std::string& reference)
+{
+    for (int i = 0; i < 1000; ++i) {
+        const std::string pixels = output.render(widget);
+        if (pixels != reference)
+            return pixels;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    ADD_FAILURE() << "icon did not finish loading within 1 second";
+    return reference;
+}
+
 TEST(MapWidgetMarker, SetUpdateAndClearState)
 {
     SoftwareRenderer output;
@@ -171,6 +186,153 @@ TEST(MapWidgetMarker, WidgetClipContainsOffViewportMarker)
 
     widget.setMarker("player", -10000.0f, -10000.0f);
     EXPECT_TRUE(output.render(widget) == baseline);
+}
+
+TEST(MapWidgetMarker, PackIconsRenderWithFixedAspectFallbackAndReuse)
+{
+    SoftwareRenderer output;
+    Pack iconPack(ICON_PACK_PATH);
+    iconPack.setVariant("standard");
+    Ui::MapWidget widget(0, 0, 207, 100, IMAGE_PATH);
+    widget.setMarkerPack(&iconPack);
+    const std::string baseline = output.render(widget);
+
+    widget.setMarker("marker", 414.0f, 200.0f);
+    const std::string diamond = output.render(widget);
+    EXPECT_NE(diamond, baseline);
+
+    Ui::MapWidget::MarkerAppearance icon;
+    icon.type = Ui::MapWidget::MarkerAppearance::Type::ICON;
+    icon.iconPath = "images/items/toggle.png"; // 64 by 32 in the pack
+    icon.iconSize = 16;
+    widget.setMarker("marker", 414.0f, 200.0f, icon);
+    const std::string iconPixels = renderUntilDifferent(output, widget, diamond);
+    EXPECT_NE(iconPixels, diamond);
+    const Bounds iconBounds = differenceBounds(baseline, iconPixels, output.surface->pitch);
+    EXPECT_FALSE(iconBounds.empty());
+    EXPECT_LE(iconBounds.width(), 16);
+    EXPECT_LE(iconBounds.height(), 8);
+    EXPECT_LE(std::abs((iconBounds.left + iconBounds.right) - 207), 3);
+    EXPECT_LE(std::abs((iconBounds.top + iconBounds.bottom) - 100), 3);
+
+    widget.setZoom(2.0f);
+    Ui::MapWidget zoomReference(0, 0, 207, 100, IMAGE_PATH);
+    zoomReference.setZoom(2.0f);
+    const Bounds zoomedBounds = differenceBounds(output.render(zoomReference), output.render(widget), output.surface->pitch);
+    EXPECT_FALSE(zoomedBounds.empty());
+    EXPECT_LE(std::abs(zoomedBounds.width() - iconBounds.width()), 1);
+    EXPECT_LE(std::abs(zoomedBounds.height() - iconBounds.height()), 1);
+
+    widget.setPanCenter(300.0f, 200.0f);
+    Ui::MapWidget panReference(0, 0, 207, 100, IMAGE_PATH);
+    panReference.setZoom(2.0f);
+    panReference.setPanCenter(300.0f, 200.0f);
+    const std::string pannedBaseline = output.render(panReference);
+    const Bounds pannedBounds = differenceBounds(pannedBaseline, output.render(widget), output.surface->pitch);
+    EXPECT_FALSE(pannedBounds.empty());
+    EXPECT_LE(std::abs(pannedBounds.width() - iconBounds.width()), 1);
+    EXPECT_LE(std::abs(pannedBounds.height() - iconBounds.height()), 1);
+
+    // A coordinate-only replacement of the same icon must keep the ready resource instead of showing its diamond.
+    Ui::MapWidget movedReference(0, 0, 207, 100, IMAGE_PATH);
+    movedReference.setZoom(2.0f);
+    movedReference.setPanCenter(300.0f, 200.0f);
+    movedReference.setMarker("marker", 200.0f, 200.0f);
+    const std::string movedDiamond = output.render(movedReference);
+    widget.setMarker("marker", 200.0f, 200.0f, icon);
+    EXPECT_NE(output.render(widget), movedDiamond);
+
+    // Missing assets retain the normal diamond fallback even after their asynchronous decode has completed.
+    Ui::MapWidget::MarkerAppearance missing = icon;
+    missing.iconPath = "images/items/missing.png";
+    widget.setMarker("marker", 200.0f, 200.0f, missing);
+    EXPECT_EQ(output.render(widget), movedDiamond);
+    for (int i = 0; i < 20; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        EXPECT_EQ(output.render(widget), movedDiamond);
+    }
+
+    // Replacement, removal, and reset-style clearing release their visible resource and restore the map.
+    widget.setMarker("marker", 200.0f, 200.0f, icon);
+    EXPECT_NE(renderUntilDifferent(output, widget, movedDiamond), movedDiamond);
+    widget.clearMarker("marker");
+    EXPECT_EQ(output.render(widget), pannedBaseline);
+    widget.setMarker("marker", 200.0f, 200.0f, icon);
+    widget.clearMarkers();
+    EXPECT_EQ(output.render(widget), pannedBaseline);
+}
+
+TEST(MapWidgetMarker, PackIconClippingContainsOffViewportIcon)
+{
+    SoftwareRenderer output;
+    Pack pack(PACK_PATH);
+    pack.setVariant("standard");
+    Ui::MapWidget widget(20, 20, 100, 80, IMAGE_PATH);
+    widget.setMarkerPack(&pack);
+    const std::string baseline = output.render(widget);
+
+    Ui::MapWidget::MarkerAppearance icon;
+    icon.type = Ui::MapWidget::MarkerAppearance::Type::ICON;
+    icon.iconPath = "images/a.png";
+    widget.setMarker("marker", 414.0f, 200.0f);
+    const std::string diamond = output.render(widget);
+    widget.setMarker("marker", 414.0f, 200.0f, icon);
+    EXPECT_NE(renderUntilDifferent(output, widget, diamond), diamond);
+    widget.setMarker("marker", -10000.0f, -10000.0f, icon);
+    EXPECT_EQ(output.render(widget), baseline);
+}
+
+TEST(TrackerViewMapMarkerHint, IconAppearanceLoadsPackRelativeAssetAndReplacesDiamond)
+{
+    (void)getDefaultFont();
+    lua_State* L = luaL_newstate();
+    ASSERT_NE(L, nullptr);
+
+    {
+        SoftwareRenderer output;
+        Pack pack(PACK_PATH);
+        pack.setVariant("standard");
+        Tracker tracker(&pack, L);
+        ASSERT_TRUE(tracker.AddMaps("maps/maps.json"));
+        ASSERT_TRUE(tracker.AddLocations("locations/locations.json"));
+        ASSERT_TRUE(tracker.AddItems("items/items.json"));
+        ASSERT_TRUE(tracker.AddLayouts("layouts/standard.json"));
+
+        TestTrackerView view(&tracker);
+        view.relayout();
+        Ui::MapWidget* map = view.map("map");
+        ASSERT_NE(map, nullptr);
+        map->setPosition({0, 0});
+        map->setSize({207, 100});
+        map->setImage(IMAGE_PATH);
+
+        const std::string baseline = output.render(*map);
+        tracker.UiHint("MapMarker map", R"({"id":"player","x":414,"y":200})");
+        const std::string diamond = output.render(*map);
+        EXPECT_NE(diamond, baseline);
+
+        tracker.UiHint("MapMarker map", R"({"id":"player","x":414,"y":200,"appearance":{"type":"icon","path":"images/a.png","size":16}})");
+        const std::string icon = renderUntilDifferent(output, *map, diamond);
+        EXPECT_NE(icon, diamond);
+
+        SDL_Surface* iconSurface = pack.getImage("images/a.png");
+        ASSERT_NE(iconSurface, nullptr);
+        Uint8 red, green, blue, alpha;
+        SDL_GetRGBA(*static_cast<const Uint32*>(iconSurface->pixels), iconSurface->format,
+            &red, &green, &blue, &alpha);
+        EXPECT_EQ(alpha, 0);
+        const size_t transparentCorner = static_cast<size_t>(42 * output.surface->pitch + 95 * 4);
+        EXPECT_EQ(icon.compare(transparentCorner, 4, baseline, transparentCorner, 4), 0);
+
+        // Omitted size defaults to 16, and this full replacement retains the already-ready path resource.
+        tracker.UiHint("MapMarker map", R"({"id":"player","x":414,"y":200,"appearance":{"type":"icon","path":"images/a.png"}})");
+        EXPECT_EQ(output.render(*map), icon);
+
+        tracker.UiHint("MapMarker map", R"({"id":"player","remove":true})");
+        EXPECT_EQ(output.render(*map), baseline);
+    }
+
+    lua_close(L);
 }
 
 TEST(TrackerViewMapMarkerHint, ParsesJsonRoutesRemovesAndResetsWithoutSaving)
@@ -250,6 +412,20 @@ TEST(TrackerViewMapMarkerHint, ParsesJsonRoutesRemovesAndResetsWithoutSaving)
             R"({"id":"player","x":1,"y":2,"appearance":{"type":"diamond","color":"#f00"}})",
             R"({"id":"player","x":1,"y":2,"appearance":{"type":"diamond","color":"#ff000"}})",
             R"({"id":"player","x":1,"y":2,"appearance":{"type":"diamond","color":"#ff000g"}})",
+            R"({"id":"player","x":1,"y":2,"appearance":{"type":"icon"}})",
+            R"({"id":"player","x":1,"y":2,"appearance":{"type":"icon","path":""}})",
+            R"({"id":"player","x":1,"y":2,"appearance":{"type":"icon","path":1}})",
+            R"({"id":"player","x":1,"y":2,"appearance":{"type":"icon","path":"/images/a.png"}})",
+            R"({"id":"player","x":1,"y":2,"appearance":{"type":"icon","path":"../images/a.png"}})",
+            R"({"id":"player","x":1,"y":2,"appearance":{"type":"icon","path":"images/../a.png"}})",
+            R"({"id":"player","x":1,"y":2,"appearance":{"type":"icon","path":"C:\\\\images\\a.png"}})",
+            R"({"id":"player","x":1,"y":2,"appearance":{"type":"icon","path":"images/a.png","size":0}})",
+            R"({"id":"player","x":1,"y":2,"appearance":{"type":"icon","path":"images/a.png","size":-1}})",
+            R"({"id":"player","x":1,"y":2,"appearance":{"type":"icon","path":"images/a.png","size":1.5}})",
+            R"({"id":"player","x":1,"y":2,"appearance":{"type":"icon","path":"images/a.png","size":"16"}})",
+            R"({"id":"player","x":1,"y":2,"appearance":{"type":"icon","path":"images/a.png","size":4097}})",
+            R"({"id":"player","x":1,"y":2,"appearance":{"type":"icon","path":"images/a.png","size":2147483648}})",
+            R"({"id":"player","x":1,"y":2,"appearance":{"type":"icon","path":"images/a.png","color":"#ff0000"}})",
         };
         for (const auto& value : invalidValues) {
             EXPECT_NO_THROW(tracker.UiHint("MapMarker map", value));
