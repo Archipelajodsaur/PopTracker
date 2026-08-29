@@ -3,6 +3,7 @@
 #include "packimagefuture.hpp"
 #include "../uilib/drawhelper.h"
 #include <algorithm> // std::max, std::min
+#include <cmath>
 
 
 namespace Ui {
@@ -188,6 +189,7 @@ void MapWidget::connectSignals()
 
         // Handle dragging for pan (only when zoomed in or not at 0,0)
         if (buttons & SDL_BUTTON_LMASK) {
+            clearMarkerHover();
             if (!_dragging && (_zoom > 1.0f || _panX != 0.0f || _panY != 0.0f)) {
                 // Start drag
                 _dragging = true;
@@ -225,6 +227,11 @@ void MapWidget::connectSignals()
         const int x1 = x + _pos.left; // relative to parent to match dstRect
         const int y1 = y + _pos.top;
 
+        if (updateMarkerHover(x1, y1, absX, absY, srcRect, dstRect)) {
+            _locationHover.reset();
+            return;
+        }
+
         for (auto locIt = _locations.rbegin(); locIt != _locations.rend(); ++locIt) {
             const auto& loc = locIt->second;
             for (const auto& pos: loc.pos) {
@@ -259,15 +266,15 @@ void MapWidget::connectSignals()
 
     this->onMouseLeave += { this, [this](void*) {
         _locationHover.reset();
+        clearMarkerHover();
         _dragging = false;
     }};
 
     this->onClick += { this, [this](void*, int, int, int button) {
         // Middle click resets zoom and pan
         if (button == MouseButton::BUTTON_MIDDLE) {
-            _zoom = 1.0f;
-            _panX = 0.0f;
-            _panY = 0.0f;
+            setZoom(1.0f);
+            setPan(0.0f, 0.0f);
         }
     }};
 
@@ -277,6 +284,8 @@ void MapWidget::connectSignals()
 
         if (_size.width < 1 || _size.height < 1 || _autoSize.width < 1 || _autoSize.height < 1)
             return;
+
+        clearMarkerHover();
 
         const float zoomFactor = (scrollY > 0) ? ZOOM_IN_FACTOR : ZOOM_OUT_FACTOR;
         float newZoom = _zoom * zoomFactor;
@@ -451,25 +460,28 @@ void MapWidget::render(Renderer renderer, const int offX, const int offY)
         }
     }
 
-    for (const auto& [id, marker] : _markers) {
-        (void)id;
+    std::vector<decltype(_markers)::iterator> markers;
+    markers.reserve(_markers.size());
+    for (auto markerIt = _markers.begin(); markerIt != _markers.end(); ++markerIt)
+        markers.push_back(markerIt);
+    std::sort(markers.begin(), markers.end(), [](const auto& left, const auto& right) {
+        return left->second.order < right->second.order;
+    });
+    for (const auto markerIt : markers) {
+        auto& marker = markerIt->second;
         float centerX, centerY;
         calculateImagePointScreenPosition(marker.x, marker.y, srcRect, dstRect, centerX, centerY);
         SDL_Texture* iconTexture = marker.icon ? marker.icon->getTexture(renderer) : nullptr;
         const Size iconSize = marker.icon ? marker.icon->getSize() : Size::UNDEFINED;
-        if (iconTexture && iconSize.width > 0 && iconSize.height > 0) {
-            float width = static_cast<float>(marker.appearance.iconSize);
-            float height = width * static_cast<float>(iconSize.height) / static_cast<float>(iconSize.width);
-            if (height > width) {
-                width *= width / height;
-                height = static_cast<float>(marker.appearance.iconSize);
-            }
-            const SDL_FRect destination = {
-                centerX - width / 2.0f,
-                centerY - height / 2.0f,
-                std::max(1.0f, width),
-                std::max(1.0f, height),
-            };
+        const bool iconRendered = iconTexture && iconSize.width > 0 && iconSize.height > 0;
+        if (marker.iconRendered != iconRendered) {
+            marker.iconRendered = iconRendered;
+            if (_markerHover && *_markerHover == markerIt->first)
+                _markerHoverInvalidated = markerIt->first;
+        }
+        if (iconRendered) {
+            SDL_FRect destination;
+            calculateMarkerScreenRect(marker, srcRect, dstRect, destination);
             SDL_RenderCopyF(renderer, iconTexture, nullptr, &destination);
         } else {
             const int innerX = static_cast<int>(centerX - MARKER_SIZE / 2.0f);
@@ -573,6 +585,59 @@ void MapWidget::calculateImagePointScreenPosition(const float x, const float y, 
         (y - static_cast<float>(srcRect.y)) * scale)) + dstRect.y;
 }
 
+void MapWidget::calculateMarkerScreenRect(const Marker& marker, const SDL_Rect& srcRect, const SDL_FRect& dstRect,
+        SDL_FRect& rect)
+{
+    float centerX, centerY;
+    calculateImagePointScreenPosition(marker.x, marker.y, srcRect, dstRect, centerX, centerY);
+
+    const Size iconSize = marker.icon ? marker.icon->getSize() : Size::UNDEFINED;
+    if (marker.icon && iconSize.width > 0 && iconSize.height > 0) {
+        float width = static_cast<float>(marker.appearance.iconSize);
+        float height = width * static_cast<float>(iconSize.height) / static_cast<float>(iconSize.width);
+        if (height > width) {
+            width *= width / height;
+            height = static_cast<float>(marker.appearance.iconSize);
+        }
+        rect = {
+            centerX - width / 2.0f,
+            centerY - height / 2.0f,
+            std::max(1.0f, width),
+            std::max(1.0f, height),
+        };
+        return;
+    }
+
+    const int innerX = static_cast<int>(centerX - MARKER_SIZE / 2.0f);
+    const int innerY = static_cast<int>(centerY - MARKER_SIZE / 2.0f);
+    rect = {
+        static_cast<float>(innerX - MARKER_BORDER_SIZE),
+        static_cast<float>(innerY - MARKER_BORDER_SIZE),
+        static_cast<float>(MARKER_SIZE + 2 * MARKER_BORDER_SIZE),
+        static_cast<float>(MARKER_SIZE + 2 * MARKER_BORDER_SIZE),
+    };
+}
+
+bool MapWidget::isMarkerHit(const Marker& marker, const int x, const int y, const SDL_Rect& srcRect,
+        const SDL_FRect& dstRect)
+{
+    if (marker.iconRendered) {
+        SDL_FRect rect;
+        calculateMarkerScreenRect(marker, srcRect, dstRect, rect);
+        return x >= rect.x && x < rect.x + rect.w && y >= rect.y && y < rect.y + rect.h;
+    }
+
+    float centerX, centerY;
+    calculateImagePointScreenPosition(marker.x, marker.y, srcRect, dstRect, centerX, centerY);
+    const float innerX = static_cast<float>(static_cast<int>(centerX - MARKER_SIZE / 2.0f));
+    const float innerY = static_cast<float>(static_cast<int>(centerY - MARKER_SIZE / 2.0f));
+    const float outerSize = static_cast<float>(MARKER_SIZE + 2 * MARKER_BORDER_SIZE);
+    const float diamondCenterX = innerX + MARKER_SIZE / 2.0f;
+    const float diamondCenterY = innerY + MARKER_SIZE / 2.0f;
+    return std::abs(static_cast<float>(x) - diamondCenterX) + std::abs(static_cast<float>(y) - diamondCenterY) <=
+        outerSize / 2.0f;
+}
+
 void MapWidget::calculateLocationScreenRect(const Point& pos, const SDL_Rect& srcRect, const SDL_FRect& dstRect,
     const float baseScale, int& innerX, int& innerY, int& innerW, int& innerH, int& borderSize)
 {
@@ -621,11 +686,13 @@ void MapWidget::setLocationHighlight(const std::string& id, Highlight highlight,
 
 void MapWidget::setMarker(const std::string& id, const float x, const float y)
 {
-    setMarker(id, x, y, {});
+    setMarker(id, x, y, {}, {});
 }
 
-void MapWidget::setMarker(const std::string& id, const float x, const float y, MarkerAppearance appearance)
+void MapWidget::setMarker(const std::string& id, const float x, const float y, MarkerAppearance appearance,
+        std::string label)
 {
+    clearMarkerHover();
     std::shared_ptr<MarkerIconResource> icon;
     if (appearance.type == MarkerAppearance::Type::ICON && _markerPack) {
         const auto existing = _markers.find(id);
@@ -641,17 +708,72 @@ void MapWidget::setMarker(const std::string& id, const float x, const float y, M
             }
         }
     }
-    _markers[id] = {x, y, std::move(appearance), std::move(icon)};
+    _markers[id] = {x, y, std::move(appearance), std::move(label), std::move(icon), ++_nextMarkerOrder};
 }
 
 void MapWidget::clearMarker(const std::string& id)
 {
+    clearMarkerHover();
     _markers.erase(id);
 }
 
 void MapWidget::clearMarkers()
 {
+    clearMarkerHover();
     _markers.clear();
+}
+
+bool MapWidget::updateMarkerHover(const int x, const int y, const int absX, const int absY, const SDL_Rect& srcRect,
+        const SDL_FRect& dstRect)
+{
+    const Marker* hovered = nullptr;
+    const std::string* id = nullptr;
+    for (const auto& pair : _markers) {
+        if (isMarkerHit(pair.second, x, y, srcRect, dstRect) && (!hovered || pair.second.order > hovered->order)) {
+            hovered = &pair.second;
+            id = &pair.first;
+        }
+    }
+    if (!hovered) {
+        clearMarkerHover();
+        return false;
+    }
+    if (*id != _markerHover) {
+        _markerHover = *id;
+        onMarkerHover.emit(this, *_markerHover, hovered->label, absX, absY);
+    }
+    return true;
+}
+
+void MapWidget::clearMarkerHover()
+{
+    _markerHoverInvalidated.reset();
+    if (!_markerHover)
+        return;
+    _markerHover.reset();
+    onMarkerHover.emit(this, "", "", 0, 0);
+}
+
+std::optional<std::string> MapWidget::takeMarkerHoverInvalidation()
+{
+    const auto invalidated = std::move(_markerHoverInvalidated);
+    _markerHoverInvalidated.reset();
+    if (invalidated && _markerHover && *_markerHover == *invalidated)
+        _markerHover.reset();
+    return invalidated;
+}
+
+void MapWidget::setZoom(const float zoom)
+{
+    clearMarkerHover();
+    _zoom = zoom;
+}
+
+void MapWidget::setPan(const float x, const float y)
+{
+    clearMarkerHover();
+    _panX = x;
+    _panY = y;
 }
 
 std::tuple<float, float> MapWidget::getPanCenter() const
@@ -664,6 +786,7 @@ std::tuple<float, float> MapWidget::getPanCenter() const
 
 void MapWidget::setPanCenter(const float x, const float y)
 {
+    clearMarkerHover();
     _panX = static_cast<float>(_autoSize.width) / 2 - x;
     _panY = static_cast<float>(_autoSize.height) / 2 - y;
 }
