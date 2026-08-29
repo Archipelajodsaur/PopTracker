@@ -328,6 +328,10 @@ TEST(TrackerViewMapMarkerHint, IconAppearanceLoadsPackRelativeAssetAndReplacesDi
         tracker.UiHint("MapMarker map", R"({"id":"player","x":414,"y":200,"appearance":{"type":"icon","path":"images/a.png"}})");
         EXPECT_EQ(output.render(*map), icon);
 
+        // The JSON layer accepts a non-empty path; Pack applies its own safety rules and yields the fallback.
+        tracker.UiHint("MapMarker map", R"({"id":"player","x":414,"y":200,"appearance":{"type":"icon","path":"../images/a.png"}})");
+        EXPECT_EQ(output.render(*map), diamond);
+
         tracker.UiHint("MapMarker map", R"({"id":"player","remove":true})");
         EXPECT_EQ(output.render(*map), baseline);
     }
@@ -415,10 +419,6 @@ TEST(TrackerViewMapMarkerHint, ParsesJsonRoutesRemovesAndResetsWithoutSaving)
             R"({"id":"player","x":1,"y":2,"appearance":{"type":"icon"}})",
             R"({"id":"player","x":1,"y":2,"appearance":{"type":"icon","path":""}})",
             R"({"id":"player","x":1,"y":2,"appearance":{"type":"icon","path":1}})",
-            R"({"id":"player","x":1,"y":2,"appearance":{"type":"icon","path":"/images/a.png"}})",
-            R"({"id":"player","x":1,"y":2,"appearance":{"type":"icon","path":"../images/a.png"}})",
-            R"({"id":"player","x":1,"y":2,"appearance":{"type":"icon","path":"images/../a.png"}})",
-            R"({"id":"player","x":1,"y":2,"appearance":{"type":"icon","path":"C:\\\\images\\a.png"}})",
             R"({"id":"player","x":1,"y":2,"appearance":{"type":"icon","path":"images/a.png","size":0}})",
             R"({"id":"player","x":1,"y":2,"appearance":{"type":"icon","path":"images/a.png","size":-1}})",
             R"({"id":"player","x":1,"y":2,"appearance":{"type":"icon","path":"images/a.png","size":1.5}})",

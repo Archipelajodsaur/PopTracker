@@ -72,23 +72,6 @@ static bool isMapMarkerColor(const std::string& color)
     });
 }
 
-static bool isPackRelativePath(const std::string& path)
-{
-    if (path.empty() || path.find_first_of("/\\") == 0 || path.find(char{}) != std::string::npos ||
-            path.find(":") == 1)
-        return false;
-    size_t start = 0;
-    while (start < path.size()) {
-        const size_t end = path.find_first_of("/\\", start);
-        if (path.substr(start, end - start) == "..")
-            return false;
-        if (end == std::string::npos)
-            break;
-        start = end + 1;
-    }
-    return true;
-}
-
 static bool parseMapMarkerAppearance(const nlohmann::json& json, MapWidget::MarkerAppearance& result)
 {
     const auto appearance = json.find("appearance");
@@ -114,7 +97,7 @@ static bool parseMapMarkerAppearance(const nlohmann::json& json, MapWidget::Mark
 
     const auto path = appearance->find("path");
     if (path == appearance->end() || !path->is_string() ||
-            !isPackRelativePath(path->get_ref<const std::string&>()))
+            path->get_ref<const std::string&>().empty())
         return false;
     result.type = MapWidget::MarkerAppearance::Type::ICON;
     result.iconPath = path->get<std::string>();

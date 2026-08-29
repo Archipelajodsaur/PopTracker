@@ -672,10 +672,11 @@ The default appearance is a white diamond with a black border. A diamond may spe
 }
 ```
 
-An icon uses a non-empty, pack-relative image path. It is read from the active pack, including the selected
-variant and overrides, so icon markers work with both directory and ZIP-pack distributions. `size` is an optional
-positive integer that defaults to 16. It is a fixed screen-pixel bounding box: the image keeps its aspect ratio,
-is centered on the marker coordinates, and does not scale with map zoom.
+An icon's `path` is a non-empty string naming a pack-relative image. The path is resolved by the active pack,
+including its normal path safety checks, selected variant, and overrides, so icon markers work with both directory
+and ZIP-pack distributions. `size` is an optional positive integer that defaults to 16. It is a fixed screen-pixel
+bounding box: the image keeps its aspect ratio, is centered on the marker coordinates, and does not scale with map
+zoom.
 
 ```json
 {
