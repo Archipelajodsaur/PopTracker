@@ -53,7 +53,10 @@ public:
         float x = 0.0f;
         float y = 0.0f;
         MarkerAppearance appearance;
+        std::string label;
         std::shared_ptr<MarkerIconResource> icon;
+        size_t order = 0;
+        bool iconRendered = false;
     };
 
     // TODO: enum location state
@@ -62,13 +65,15 @@ public:
     void setLocationHighlight(const std::string& name, Highlight highlight, size_t n);
 
     void setMarker(const std::string& id, float x, float y);
-    void setMarker(const std::string& id, float x, float y, MarkerAppearance appearance);
+    void setMarker(const std::string& id, float x, float y, MarkerAppearance appearance, std::string label = {});
     void clearMarker(const std::string& id);
     void clearMarkers();
     void setMarkerPack(const Pack* pack) { _markerPack = pack; }
+    std::optional<std::string> takeMarkerHoverInvalidation();
 
     // FIXME: this does not work if name is not unique
     Signal<const std::string&,int,int> onLocationHover; // FIXME: we should provide absolute AND relative mouse position through the Event stack
+    Signal<const std::string&,const std::string&,int,int> onMarkerHover;
 
     void render(Renderer renderer, int offX, int offY) override;
     int getAbsLeft() const { return _absX; } // FIXME: this is not really a good solution
@@ -78,9 +83,9 @@ public:
     void setHideUnreachableLocations(bool hide) { _hideUnreachableLocations = hide; }
 
     float getZoom() const { return _zoom; }
-    void setZoom(const float zoom) { _zoom = zoom; }
+    void setZoom(float zoom);
     std::tuple<float, float> getPan() const { return {_panX, _panY}; }
-    void setPan(const float x, const float y) { _panX = x; _panY = y; }
+    void setPan(float x, float y);
     std::tuple<float, float> getPanCenter() const;
     void setPanCenter(float x, float y);
 
@@ -95,6 +100,9 @@ protected:
     std::map<std::string, Marker> _markers;
     std::map<std::string, std::weak_ptr<MarkerIconResource>> _markerIcons;
     std::optional<std::string> _locationHover; // TODO: store iterator instead of string?
+    std::optional<std::string> _markerHover;
+    std::optional<std::string> _markerHoverInvalidated;
+    size_t _nextMarkerOrder = 0;
 
     bool _hideClearedLocations = false;
     bool _hideUnreachableLocations = false;
@@ -124,8 +132,13 @@ private:
         SDL_FRect& dstRect) const;
     static void calculateImagePointScreenPosition(float x, float y, const SDL_Rect& srcRect,
         const SDL_FRect& dstRect, float& screenX, float& screenY);
+    static void calculateMarkerScreenRect(const Marker& marker, const SDL_Rect& srcRect, const SDL_FRect& dstRect,
+        SDL_FRect& rect);
+    static bool isMarkerHit(const Marker& marker, int x, int y, const SDL_Rect& srcRect, const SDL_FRect& dstRect);
     static void calculateLocationScreenRect(const Point& pos, const SDL_Rect& srcRect, const SDL_FRect& dstRect,
         float baseScale, int& innerX, int& innerY, int& innerW, int& innerH, int& borderSize);
+    bool updateMarkerHover(int x, int y, int absX, int absY, const SDL_Rect& srcRect, const SDL_FRect& dstRect);
+    void clearMarkerHover();
 };
 
 } // namespace Ui

@@ -9,6 +9,8 @@
 #include "../../lib/luaglue/lua_include.h"
 #include "../../src/ui/mapwidget.h"
 #include "../../src/ui/trackerview.h"
+#include "../../src/uilib/label.h"
+#include "../../src/uilib/tooltip.h"
 #include "../uilib/font_helper.h"
 
 namespace {
@@ -43,6 +45,33 @@ public:
             {"maps", {"map", "map"}},
         }));
     }
+
+    const Ui::Tooltip* markerTooltip() const
+    {
+        for (const Ui::Widget* child : getChildren()) {
+            if (const auto* tooltip = dynamic_cast<const Ui::Tooltip*>(child))
+                return tooltip;
+        }
+        return nullptr;
+    }
+
+    std::string markerTooltipText() const
+    {
+        const Ui::Tooltip* tooltip = markerTooltip();
+        if (!tooltip)
+            return {};
+        for (const Ui::Widget* child : tooltip->getChildren()) {
+            if (const auto* label = dynamic_cast<const Ui::Label*>(child))
+                return label->getText();
+        }
+        return {};
+    }
+
+    void rebuildLayout()
+    {
+        updateLayout("");
+        relayout();
+    }
 };
 
 class SoftwareRenderer {
@@ -65,7 +94,7 @@ public:
         SDL_FreeSurface(surface);
     }
 
-    std::string render(Ui::MapWidget& widget)
+    std::string render(Ui::Widget& widget)
     {
         SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
         SDL_RenderClear(renderer);
@@ -282,6 +311,186 @@ TEST(MapWidgetMarker, PackIconClippingContainsOffViewportIcon)
     EXPECT_EQ(output.render(widget), baseline);
 }
 
+TEST(MapWidgetMarker, LabelHoverUsesRenderedFootprintsAndTopmostMarker)
+{
+    SoftwareRenderer output;
+    Pack pack(ICON_PACK_PATH);
+    pack.setVariant("standard");
+    Ui::MapWidget widget(0, 0, 207, 100, IMAGE_PATH);
+    widget.setMarkerPack(&pack);
+    output.render(widget);
+
+    struct Hover {
+        std::string id;
+        std::string label;
+    };
+    std::vector<Hover> hovers;
+    std::vector<std::string> locationHovers;
+    widget.onMarkerHover += {&widget, [&hovers](void*, const std::string& id, const std::string& label, int, int) {
+        hovers.push_back({id, label});
+    }};
+    widget.onLocationHover += {&widget, [&locationHovers](void*, const std::string& id, int, int) {
+        locationHovers.push_back(id);
+    }};
+
+    Ui::MapWidget::Point location;
+    location.x = 414;
+    location.y = 200;
+    location.size = 48;
+    location.borderThickness = 8;
+    location.shape = Ui::MapWidget::Shape::RECT;
+    widget.addLocation("location", std::move(location));
+
+    // The leftmost rendered diamond pixel is hoverable, including its black border.
+    widget.setMarker("diamond", 414.0f, 200.0f, {}, "diamond label");
+    widget.onMouseMove.emit(&widget, 95, 50, 0);
+    ASSERT_FALSE(hovers.empty());
+    EXPECT_EQ(hovers.back().id, "diamond");
+    EXPECT_EQ(hovers.back().label, "diamond label");
+    EXPECT_TRUE(locationHovers.empty());
+
+    // A transparent diamond corner is not part of the marker footprint, so the location receives hover.
+    hovers.clear();
+    widget.onMouseMove.emit(&widget, 95, 42, 0);
+    ASSERT_FALSE(hovers.empty());
+    EXPECT_TRUE(hovers.back().id.empty());
+    ASSERT_FALSE(locationHovers.empty());
+    EXPECT_EQ(locationHovers.back(), "location");
+
+    widget.onMouseMove.emit(&widget, 94, 50, 0);
+    ASSERT_FALSE(hovers.empty());
+    EXPECT_TRUE(hovers.back().id.empty());
+
+    Ui::MapWidget::MarkerAppearance icon;
+    icon.type = Ui::MapWidget::MarkerAppearance::Type::ICON;
+    icon.iconPath = "images/items/toggle.png";
+    icon.iconSize = 16;
+    const std::string diamond = output.render(widget);
+    widget.setMarker("icon", 414.0f, 200.0f, icon, "icon label");
+    EXPECT_NE(renderUntilDifferent(output, widget, diamond), diamond);
+
+    // The rendered 16-by-8 icon footprint is wider than the diamond and is hoverable at x=96.
+    widget.clearMarker("diamond");
+    widget.onMouseMove.emit(&widget, 96, 50, 0);
+    ASSERT_FALSE(hovers.empty());
+    EXPECT_EQ(hovers.back().id, "icon");
+    EXPECT_EQ(hovers.back().label, "icon label");
+    widget.onMouseMove.emit(&widget, 94, 50, 0);
+    ASSERT_FALSE(hovers.empty());
+    EXPECT_TRUE(hovers.back().id.empty());
+
+    // A marker inserted above an already-hovered marker owns hover on the next hit test.
+    widget.clearMarkers();
+    widget.setMarker("bottom", 414.0f, 200.0f, {}, "bottom label");
+    widget.onMouseMove.emit(&widget, 103, 50, 0);
+    ASSERT_FALSE(hovers.empty());
+    EXPECT_EQ(hovers.back().id, "bottom");
+    widget.setMarker("top", 414.0f, 200.0f, {}, "top label");
+    ASSERT_FALSE(hovers.empty());
+    EXPECT_TRUE(hovers.back().id.empty());
+    widget.onMouseMove.emit(&widget, 103, 50, 0);
+    ASSERT_FALSE(hovers.empty());
+    EXPECT_EQ(hovers.back().id, "top");
+    EXPECT_EQ(hovers.back().label, "top label");
+}
+
+TEST(MapWidgetMarker, LabelHoverClearsOnMarkerChangesMouseLeaveAndDragging)
+{
+    SoftwareRenderer output;
+    Ui::MapWidget widget(0, 0, 207, 100, IMAGE_PATH);
+    output.render(widget);
+
+    std::vector<std::string> hoverIds;
+    widget.onMarkerHover += {&widget, [&hoverIds](void*, const std::string& id, const std::string&, int, int) {
+        hoverIds.push_back(id);
+    }};
+    const auto expectHover = [&widget, &hoverIds] {
+        widget.onMouseMove.emit(&widget, 103, 50, 0);
+        ASSERT_FALSE(hoverIds.empty());
+        EXPECT_EQ(hoverIds.back(), "marker");
+    };
+    const auto expectCleared = [&hoverIds] {
+        ASSERT_FALSE(hoverIds.empty());
+        EXPECT_TRUE(hoverIds.back().empty());
+    };
+
+    widget.setMarker("marker", 414.0f, 200.0f, {}, "first label");
+    expectHover();
+    widget.setMarker("marker", 700.0f, 200.0f, {}, "moved label");
+    expectCleared();
+
+    widget.setMarker("marker", 414.0f, 200.0f, {}, "replacement label");
+    expectHover();
+    widget.clearMarker("marker");
+    expectCleared();
+
+    widget.setMarker("marker", 414.0f, 200.0f, {}, "clear label");
+    expectHover();
+    widget.clearMarkers();
+    expectCleared();
+
+    widget.setMarker("marker", 414.0f, 200.0f, {}, "leave label");
+    expectHover();
+    widget.onMouseLeave.emit(&widget);
+    expectCleared();
+
+    widget.setMarker("marker", 414.0f, 200.0f, {}, "drag label");
+    expectHover();
+    widget.setZoom(2.0f);
+    widget.onMouseMove.emit(&widget, 103, 50, SDL_BUTTON_LMASK);
+    expectCleared();
+
+    widget.setZoom(1.0f);
+    widget.setMarker("marker", 414.0f, 200.0f, {}, "transform label");
+    expectHover();
+    widget.setPanCenter(414.0f, 200.0f);
+    expectCleared();
+
+    widget.setMarker("marker", 414.0f, 200.0f, {}, "scroll label");
+    expectHover();
+    widget.onScroll.emit(&widget, 103, 1, 0);
+    expectCleared();
+
+    widget.setMarker("marker", 414.0f, 200.0f, {}, "middle label");
+    expectHover();
+    widget.onClick.emit(&widget, 103, 50, Ui::BUTTON_MIDDLE);
+    expectCleared();
+}
+
+TEST(MapWidgetMarker, IconHoverShrinksFromLoadingFallbackToReadyFootprint)
+{
+    SoftwareRenderer output;
+    Pack pack(ICON_PACK_PATH);
+    pack.setVariant("standard");
+    Ui::MapWidget widget(0, 0, 207, 100, IMAGE_PATH);
+    widget.setMarkerPack(&pack);
+    output.render(widget);
+
+    std::vector<std::string> hoverIds;
+    widget.onMarkerHover += {&widget, [&hoverIds](void*, const std::string& id, const std::string&, int, int) {
+        hoverIds.push_back(id);
+    }};
+    Ui::MapWidget::MarkerAppearance icon;
+    icon.type = Ui::MapWidget::MarkerAppearance::Type::ICON;
+    icon.iconPath = "images/items/toggle.png"; // 16-by-8 when rendered at iconSize 16
+    icon.iconSize = 16;
+    widget.setMarker("marker", 414.0f, 200.0f, icon, "icon label");
+
+    // This point is inside the 16-by-16 fallback diamond but outside the ready 16-by-8 icon.
+    widget.onMouseMove.emit(&widget, 103, 44, 0);
+    if (hoverIds.empty() || hoverIds.back() != "marker")
+        GTEST_SKIP() << "icon finished loading before its fallback footprint could be observed";
+
+    for (int i = 0; i < 1000; ++i) {
+        output.render(widget);
+        widget.onMouseMove.emit(&widget, 103, 44, 0);
+        if (!hoverIds.empty() && hoverIds.back().empty())
+            return;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    ADD_FAILURE() << "ready icon did not shrink its hover footprint within 1 second";
+}
+
 TEST(TrackerViewMapMarkerHint, IconAppearanceLoadsPackRelativeAssetAndReplacesDiamond)
 {
     (void)getDefaultFont();
@@ -442,6 +651,190 @@ TEST(TrackerViewMapMarkerHint, ParsesJsonRoutesRemovesAndResetsWithoutSaving)
         EXPECT_FALSE(output.render(*map) == baseline);
         tracker.UiHint("reset", "reset");
         EXPECT_TRUE(output.render(*map) == baseline);
+    }
+
+    lua_close(L);
+}
+
+TEST(TrackerViewMapMarkerHint, LabelsParseAsCompleteReplacementsAndRejectWrongTypes)
+{
+    (void)getDefaultFont();
+    lua_State* L = luaL_newstate();
+    ASSERT_NE(L, nullptr);
+
+    {
+        Pack pack(PACK_PATH);
+        pack.setVariant("standard");
+        Tracker tracker(&pack, L);
+        ASSERT_TRUE(tracker.AddMaps("maps/maps.json"));
+        ASSERT_TRUE(tracker.AddLocations("locations/locations.json"));
+        ASSERT_TRUE(tracker.AddItems("items/items.json"));
+        ASSERT_TRUE(tracker.AddLayouts("layouts/standard.json"));
+
+        TestTrackerView view(&tracker);
+        view.relayout();
+        Ui::MapWidget* map = view.map("map");
+        ASSERT_NE(map, nullptr);
+        map->setPosition({0, 0});
+        map->setSize({207, 100});
+        map->setImage(IMAGE_PATH);
+        SoftwareRenderer output;
+        const std::string baseline = output.render(*map);
+
+        struct Hover {
+            std::string id;
+            std::string label;
+        };
+        std::vector<Hover> hovers;
+        map->onMarkerHover += {map, [&hovers](void*, const std::string& id, const std::string& label, int, int) {
+            hovers.push_back({id, label});
+        }};
+        tracker.UiHint("MapMarker map", R"({"id":"player","x":414,"y":200,"label":"Player, 世界"})");
+        const std::string marked = output.render(*map);
+        EXPECT_NE(marked, baseline);
+        const Bounds markerBounds = differenceBounds(baseline, marked, output.surface->pitch);
+        ASSERT_FALSE(markerBounds.empty());
+        const int markerX = (markerBounds.left + markerBounds.right) / 2 - map->getAbsLeft();
+        const int markerY = (markerBounds.top + markerBounds.bottom) / 2 - map->getAbsTop();
+        const auto hover = [&] {
+            map->onMouseLeave.emit(map);
+            map->onMouseMove.emit(map, markerX, markerY, 0);
+            return !hovers.empty();
+        };
+        ASSERT_TRUE(hover());
+        EXPECT_EQ(hovers.back().id, "player");
+        EXPECT_EQ(hovers.back().label, "Player, 世界");
+
+        // Missing and empty labels are successful complete replacements with no tooltip text.
+        tracker.UiHint("MapMarker map", R"({"id":"player","x":414,"y":200})");
+        ASSERT_TRUE(hover());
+        EXPECT_EQ(hovers.back().id, "player");
+        EXPECT_TRUE(hovers.back().label.empty());
+        tracker.UiHint("MapMarker map", R"({"id":"player","x":414,"y":200,"label":""})");
+        ASSERT_TRUE(hover());
+        EXPECT_EQ(hovers.back().id, "player");
+        EXPECT_TRUE(hovers.back().label.empty());
+
+        tracker.UiHint("MapMarker map", R"({"id":"player","x":414,"y":200,"label":"stable label","extra":"allowed"})");
+        ASSERT_TRUE(hover());
+        EXPECT_EQ(hovers.back().label, "stable label");
+        for (const std::string invalid : {
+                 R"({"id":"player","x":414,"y":200,"label":null})",
+                 R"({"id":"player","x":414,"y":200,"label":1})",
+                 R"({"id":"player","x":414,"y":200,"label":{}})",
+                 R"({"id":"player","x":414,"y":200,"label":[]})",
+             }) {
+            EXPECT_NO_THROW(tracker.UiHint("MapMarker map", invalid));
+            ASSERT_TRUE(hover());
+            EXPECT_EQ(hovers.back().id, "player") << invalid;
+            EXPECT_EQ(hovers.back().label, "stable label") << invalid;
+        }
+    }
+
+    lua_close(L);
+}
+
+TEST(TrackerViewMapMarkerHint, LabelTooltipUsesStandardDelayAndClosesOnUpdates)
+{
+    (void)getDefaultFont();
+    lua_State* L = luaL_newstate();
+    ASSERT_NE(L, nullptr);
+
+    {
+        Pack pack(PACK_PATH);
+        pack.setVariant("standard");
+        Tracker tracker(&pack, L);
+        ASSERT_TRUE(tracker.AddMaps("maps/maps.json"));
+        ASSERT_TRUE(tracker.AddLocations("locations/locations.json"));
+        ASSERT_TRUE(tracker.AddItems("items/items.json"));
+        ASSERT_TRUE(tracker.AddLayouts("layouts/standard.json"));
+
+        TestTrackerView view(&tracker);
+        view.relayout();
+        Ui::MapWidget* map = view.map("map");
+        ASSERT_NE(map, nullptr);
+        map->setPosition({0, 0});
+        map->setSize({207, 100});
+        map->setImage(IMAGE_PATH);
+        SoftwareRenderer output;
+        const std::string baseline = output.render(view);
+
+        tracker.UiHint("MapMarker map", R"({"id":"player","x":414,"y":200,"label":"first label"})");
+        const std::string marked = output.render(view);
+        EXPECT_NE(marked, baseline);
+        const Bounds markerBounds = differenceBounds(baseline, marked, output.surface->pitch);
+        ASSERT_FALSE(markerBounds.empty());
+        const int markerX = (markerBounds.left + markerBounds.right) / 2 - map->getAbsLeft();
+        const int markerY = (markerBounds.top + markerBounds.bottom) / 2 - map->getAbsTop();
+        map->onMouseMove.emit(map, markerX, markerY, 0);
+        output.render(view);
+        EXPECT_EQ(view.markerTooltip(), nullptr);
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(Ui::Tooltip::delay + 20));
+        output.render(view);
+        ASSERT_NE(view.markerTooltip(), nullptr);
+        EXPECT_EQ(view.markerTooltipText(), "first label");
+
+        // A replacement updates the pending tooltip rather than retaining old text.
+        tracker.UiHint("MapMarker map", R"({"id":"player","x":414,"y":200,"label":"updated label"})");
+        EXPECT_EQ(view.markerTooltip(), nullptr);
+        map->onMouseMove.emit(map, markerX, markerY, 0);
+        std::this_thread::sleep_for(std::chrono::milliseconds(Ui::Tooltip::delay + 20));
+        output.render(view);
+        ASSERT_NE(view.markerTooltip(), nullptr);
+        EXPECT_EQ(view.markerTooltipText(), "updated label");
+
+        tracker.UiHint("MapMarker map", R"({"id":"player","x":414,"y":200,"label":""})");
+        EXPECT_EQ(view.markerTooltip(), nullptr);
+
+        tracker.UiHint("MapMarker map", R"({"id":"player","x":414,"y":200,"label":"remove label"})");
+        map->onMouseMove.emit(map, markerX, markerY, 0);
+        std::this_thread::sleep_for(std::chrono::milliseconds(Ui::Tooltip::delay + 20));
+        output.render(view);
+        ASSERT_NE(view.markerTooltip(), nullptr);
+        tracker.UiHint("MapMarker map", R"({"id":"player","remove":true})");
+        EXPECT_EQ(view.markerTooltip(), nullptr);
+
+        tracker.UiHint("MapMarker map", R"({"id":"player","x":414,"y":200,"label":"reset label"})");
+        map->onMouseMove.emit(map, markerX, markerY, 0);
+        std::this_thread::sleep_for(std::chrono::milliseconds(Ui::Tooltip::delay + 20));
+        output.render(view);
+        ASSERT_NE(view.markerTooltip(), nullptr);
+        tracker.UiHint("reset", "reset");
+        EXPECT_EQ(view.markerTooltip(), nullptr);
+
+        tracker.UiHint("MapMarker map", R"({"id":"player","x":414,"y":200,"label":"leave label"})");
+        map->onMouseMove.emit(map, markerX, markerY, 0);
+        std::this_thread::sleep_for(std::chrono::milliseconds(Ui::Tooltip::delay + 20));
+        output.render(view);
+        ASSERT_NE(view.markerTooltip(), nullptr);
+        map->onMouseLeave.emit(map);
+        EXPECT_EQ(view.markerTooltip(), nullptr);
+
+        tracker.UiHint("MapMarker map", R"({"id":"player","x":414,"y":200,"label":"one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine\nten\neleven\ntwelve"})");
+        map->onMouseMove.emit(map, markerX, markerY, 0);
+        std::this_thread::sleep_for(std::chrono::milliseconds(Ui::Tooltip::delay + 20));
+        output.render(view);
+        const Ui::Tooltip* multiline = view.markerTooltip();
+        ASSERT_NE(multiline, nullptr);
+        EXPECT_GE(multiline->getLeft(), 0);
+        EXPECT_GE(multiline->getTop(), 0);
+        EXPECT_LE(multiline->getLeft() + multiline->getWidth(), view.getWidth());
+        EXPECT_LE(multiline->getTop() + multiline->getHeight(), view.getHeight());
+
+        // A visible tooltip is released during a layout rebuild, and a pending one cannot outlive its map.
+        view.rebuildLayout();
+        EXPECT_EQ(view.markerTooltip(), nullptr);
+        Ui::MapWidget* rebuilt = view.map("map");
+        ASSERT_NE(rebuilt, nullptr);
+        rebuilt->setPosition({0, 0});
+        rebuilt->setSize({207, 100});
+        rebuilt->setImage(IMAGE_PATH);
+        output.render(*rebuilt);
+        tracker.UiHint("MapMarker map", R"({"id":"player","x":414,"y":200,"label":"pending label"})");
+        rebuilt->onMouseMove.emit(rebuilt, 103, 50, 0);
+        view.rebuildLayout();
+        EXPECT_EQ(view.markerTooltip(), nullptr);
     }
 
     lua_close(L);

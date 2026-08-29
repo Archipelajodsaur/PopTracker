@@ -648,13 +648,15 @@ The following hint names are defined:
 * `"MapMarker <MapName>[<n>]"`: same as above but for the nth instance starting at 0. Without `[<n>]`,
   the hint updates every visible instance of the named map, available since 0.36.0.
 
-To set or replace a marker, provide an id and finite image-space coordinates:
+To set or replace a marker, provide an id and finite image-space coordinates. An optional `label` is shown after
+the standard tooltip delay when hovering the marker. Empty or omitted labels show no tooltip:
 
 ```json
 {
   "id": "player",
   "x": 414.5,
-  "y": 200.25
+  "y": 200.25,
+  "label": "Player 1"
 }
 ```
 
@@ -704,8 +706,12 @@ explicit removal object:
 }
 ```
 
-Marker ids must be non-empty strings. Set operations require both `x` and `y`. `appearance`, when provided, is
-either a `"diamond"` with an optional valid `color`, or an `"icon"` with required `path` and optional `size`.
+Marker ids must be non-empty strings. Set operations require both `x` and `y`; `label`, when provided, must be a
+string. Labels support normal JSON text (including commas and UTF-8) and replace the prior label along with the
+rest of the marker. Marker labels use the marker's rendered diamond or icon bounds for hover, take precedence over
+location hover, and disappear when the pointer leaves or the marker is moved, replaced, removed, or reset. Tooltip
+placement is kept within the tracker view. `appearance`, when provided, is either a `"diamond"` with an optional
+valid `color`, or an `"icon"` with required `path` and optional `size`.
 Icon appearances do not accept `color`. Unrecognized fields are ignored. Wrong field types, non-finite or
 out-of-range coordinates, non-positive or unsafe icon sizes, unsupported appearances, and malformed objects are
 ignored without changing existing marker state. Markers are transient UI state: they are cleared by `reset`, are
