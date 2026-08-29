@@ -672,6 +672,28 @@ The default appearance is a white diamond with a black border. A diamond may spe
 }
 ```
 
+An icon's `path` is a non-empty string naming a pack-relative image. The path is resolved by the active pack,
+including its normal path safety checks, selected variant, and overrides, so icon markers work with both directory
+and ZIP-pack distributions. `size` is an optional positive integer that defaults to 16. It is a fixed screen-pixel
+bounding box: the image keeps its aspect ratio, is centered on the marker coordinates, and does not scale with map
+zoom.
+
+```json
+{
+  "id": "player",
+  "x": 414.5,
+  "y": 200.25,
+  "appearance": {
+    "type": "icon",
+    "path": "images/player.png",
+    "size": 16
+  }
+}
+```
+
+Transparent icon pixels remain transparent. While an icon is loading, or if the image cannot be loaded, the
+default white diamond is drawn instead. Replacing a marker with the same icon path reuses its loaded resource.
+
 Colors are `#RRGGBB` or `#AARRGGBB`; the eight-digit form uses alpha first. To remove one marker, use an
 explicit removal object:
 
@@ -682,7 +704,9 @@ explicit removal object:
 }
 ```
 
-Marker ids must be non-empty strings. Set operations require both `x` and `y`, and `appearance`, when
-provided, must contain `"type": "diamond"` with an optional valid color. Unrecognized fields are ignored. Wrong field types, non-finite or out-of-range coordinates, unsupported
-appearances, and malformed or ambiguous objects are ignored without changing existing marker state. Markers are transient UI state: they are cleared by
-`reset`, are not saved, and must be republished after a layout rebuild.
+Marker ids must be non-empty strings. Set operations require both `x` and `y`. `appearance`, when provided, is
+either a `"diamond"` with an optional valid `color`, or an `"icon"` with required `path` and optional `size`.
+Icon appearances do not accept `color`. Unrecognized fields are ignored. Wrong field types, non-finite or
+out-of-range coordinates, non-positive or unsafe icon sizes, unsupported appearances, and malformed objects are
+ignored without changing existing marker state. Markers are transient UI state: they are cleared by `reset`, are
+not saved, and must be republished after a layout rebuild.

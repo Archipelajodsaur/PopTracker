@@ -81,15 +81,36 @@ static bool parseMapMarkerAppearance(const nlohmann::json& json, MapWidget::Mark
         return false;
 
     const auto type = appearance->find("type");
-    if (type == appearance->end() || !type->is_string() || type->get<std::string>() != "diamond")
+    if (type == appearance->end() || !type->is_string())
+        return false;
+    if (type->get_ref<const std::string&>() == "diamond") {
+        const auto color = appearance->find("color");
+        if (color == appearance->end())
+            return true;
+        if (!color->is_string() || !isMapMarkerColor(color->get_ref<const std::string&>()))
+            return false;
+        result.color = Widget::Color(color->get<std::string>());
+        return true;
+    }
+    if (type->get_ref<const std::string&>() != "icon" || appearance->find("color") != appearance->end())
         return false;
 
-    const auto color = appearance->find("color");
-    if (color == appearance->end())
-        return true;
-    if (!color->is_string() || !isMapMarkerColor(color->get_ref<const std::string&>()))
+    const auto path = appearance->find("path");
+    if (path == appearance->end() || !path->is_string() ||
+            path->get_ref<const std::string&>().empty())
         return false;
-    result.color = Widget::Color(color->get<std::string>());
+    result.type = MapWidget::MarkerAppearance::Type::ICON;
+    result.iconPath = path->get<std::string>();
+
+    const auto size = appearance->find("size");
+    if (size == appearance->end())
+        return true;
+    if (!size->is_number_integer() && !size->is_number_unsigned())
+        return false;
+    const int64_t value = size->get<int64_t>();
+    if (value < 1 || value > 4096)
+        return false;
+    result.iconSize = static_cast<int>(value);
     return true;
 }
 
@@ -1012,6 +1033,7 @@ bool TrackerView::addLayoutNode(Container* container, const LayoutNode& node, si
             const auto& map = _tracker->getMap(mapname);
             const auto& f = map.getImage();
             auto *w = new MapWidget(0,0,0,0, std::make_unique<PackImageFuture>(_tracker->getPack(), f));
+            w->setMarkerPack(_tracker->getPack());
             w->setDropShaodw(node.getDropShadow(container->getDropShadow()));
             w->setHideClearedLocations(_hideClearedLocations);
             w->setHideUnreachableLocations(_hideUnreachableLocations);

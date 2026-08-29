@@ -1,6 +1,7 @@
 #pragma once
 
 #include <map>
+#include <memory>
 #include <optional>
 #include <tuple>
 #include <vector>
@@ -8,7 +9,11 @@
 #include "../core/locationsection.h"
 #include "../uilib/image.h"
 
+class Pack;
+
 namespace Ui {
+
+class MarkerIconResource;
 
 class MapWidget final : public Image {
 public:
@@ -35,16 +40,20 @@ public:
     struct MarkerAppearance {
         enum class Type {
             DIAMOND,
+            ICON,
         };
 
         Type type = Type::DIAMOND;
         Color color = {0xff, 0xff, 0xff, 0xff};
+        std::string iconPath;
+        int iconSize = 16;
     };
 
     struct Marker {
         float x = 0.0f;
         float y = 0.0f;
         MarkerAppearance appearance;
+        std::shared_ptr<MarkerIconResource> icon;
     };
 
     // TODO: enum location state
@@ -56,6 +65,7 @@ public:
     void setMarker(const std::string& id, float x, float y, MarkerAppearance appearance);
     void clearMarker(const std::string& id);
     void clearMarkers();
+    void setMarkerPack(const Pack* pack) { _markerPack = pack; }
 
     // FIXME: this does not work if name is not unique
     Signal<const std::string&,int,int> onLocationHover; // FIXME: we should provide absolute AND relative mouse position through the Event stack
@@ -83,6 +93,7 @@ protected:
     int _absY=0;
     std::map<std::string, Location> _locations;
     std::map<std::string, Marker> _markers;
+    std::map<std::string, std::weak_ptr<MarkerIconResource>> _markerIcons;
     std::optional<std::string> _locationHover; // TODO: store iterator instead of string?
 
     bool _hideClearedLocations = false;
@@ -105,6 +116,7 @@ protected:
     int _lastMouseY = 0;          ///< Mouse Y for scroll zooming
 
 private:
+    const Pack* _markerPack = nullptr;
     void connectSignals();
     /// Calculate srcRect and dstRect from size, autoSize, zoom and pan.
     /// Calling while .width or .height of size or autoSize is <1 is undefined.

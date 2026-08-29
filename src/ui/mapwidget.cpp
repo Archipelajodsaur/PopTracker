@@ -1,5 +1,6 @@
 #include "mapwidget.h"
 #include "../core/util.h" // countOf
+#include "packimagefuture.hpp"
 #include "../uilib/drawhelper.h"
 #include <algorithm> // std::max, std::min
 
@@ -11,6 +12,64 @@ static constexpr float ZOOM_OUT_FACTOR = 0.8f;
 static constexpr float MAX_ZOOM = 1000.0f;
 static constexpr int MARKER_SIZE = 12;
 static constexpr int MARKER_BORDER_SIZE = 2;
+
+class MarkerIconResource {
+public:
+    MarkerIconResource(const Pack* pack, const std::string& path)
+        : _future(std::make_unique<PackImageFuture>(pack, path))
+    {
+    }
+
+    ~MarkerIconResource()
+    {
+        for (const auto& [renderer, texture] : _textures) {
+            (void)renderer;
+            SDL_DestroyTexture(texture);
+        }
+        SDL_FreeSurface(_surface);
+    }
+
+    SDL_Texture* getTexture(Renderer renderer)
+    {
+        const auto texture = _textures.find(renderer);
+        if (texture != _textures.end())
+            return texture->second;
+        if (_failed)
+            return nullptr;
+
+        if (_future) {
+            if (!_future->isSurfaceDone()) {
+                _future->prioritize();
+                return nullptr;
+            }
+            _surface = _future->getSurface();
+            _future.reset();
+            if (!_surface) {
+                _failed = true;
+                return nullptr;
+            }
+            _size = {_surface->w, _surface->h};
+        }
+
+        SDL_Texture* result = SDL_CreateTextureFromSurface(renderer, _surface);
+        if (!result) {
+            _failed = true;
+            return nullptr;
+        }
+        SDL_SetTextureBlendMode(result, SDL_BLENDMODE_BLEND);
+        _textures.emplace(renderer, result);
+        return result;
+    }
+
+    Size getSize() const { return _size; }
+
+private:
+    std::unique_ptr<ImageFuture> _future;
+    SDL_Surface* _surface = nullptr;
+    Size _size = Size::UNDEFINED;
+    std::map<SDL_Renderer*, SDL_Texture*> _textures;
+    bool _failed = false;
+};
 
 #define _DEFAULT_STATE_COLORS { \
     /* done */ \
@@ -396,11 +455,30 @@ void MapWidget::render(Renderer renderer, const int offX, const int offY)
         (void)id;
         float centerX, centerY;
         calculateImagePointScreenPosition(marker.x, marker.y, srcRect, dstRect, centerX, centerY);
-        const int innerX = static_cast<int>(centerX - MARKER_SIZE / 2.0f);
-        const int innerY = static_cast<int>(centerY - MARKER_SIZE / 2.0f);
-        const Color& markerColor = marker.appearance.color;
-        drawDiamond(renderer, {innerX, innerY}, {MARKER_SIZE, MARKER_SIZE}, MARKER_BORDER_SIZE,
-            markerColor, markerColor, markerColor, markerColor);
+        SDL_Texture* iconTexture = marker.icon ? marker.icon->getTexture(renderer) : nullptr;
+        const Size iconSize = marker.icon ? marker.icon->getSize() : Size::UNDEFINED;
+        if (iconTexture && iconSize.width > 0 && iconSize.height > 0) {
+            float width = static_cast<float>(marker.appearance.iconSize);
+            float height = width * static_cast<float>(iconSize.height) / static_cast<float>(iconSize.width);
+            if (height > width) {
+                width *= width / height;
+                height = static_cast<float>(marker.appearance.iconSize);
+            }
+            const SDL_FRect destination = {
+                centerX - width / 2.0f,
+                centerY - height / 2.0f,
+                std::max(1.0f, width),
+                std::max(1.0f, height),
+            };
+            SDL_RenderCopyF(renderer, iconTexture, nullptr, &destination);
+        } else {
+            const int innerX = static_cast<int>(centerX - MARKER_SIZE / 2.0f);
+            const int innerY = static_cast<int>(centerY - MARKER_SIZE / 2.0f);
+            const Color markerColor = marker.appearance.type == MarkerAppearance::Type::DIAMOND ?
+                marker.appearance.color : Color{0xff, 0xff, 0xff, 0xff};
+            drawDiamond(renderer, {innerX, innerY}, {MARKER_SIZE, MARKER_SIZE}, MARKER_BORDER_SIZE,
+                markerColor, markerColor, markerColor, markerColor);
+        }
     }
 
     // Restore clipping
@@ -548,7 +626,22 @@ void MapWidget::setMarker(const std::string& id, const float x, const float y)
 
 void MapWidget::setMarker(const std::string& id, const float x, const float y, MarkerAppearance appearance)
 {
-    _markers[id] = {x, y, appearance};
+    std::shared_ptr<MarkerIconResource> icon;
+    if (appearance.type == MarkerAppearance::Type::ICON && _markerPack) {
+        const auto existing = _markers.find(id);
+        if (existing != _markers.end() && existing->second.appearance.type == MarkerAppearance::Type::ICON &&
+                existing->second.appearance.iconPath == appearance.iconPath) {
+            icon = existing->second.icon;
+        }
+        if (!icon) {
+            icon = _markerIcons[appearance.iconPath].lock();
+            if (!icon) {
+                icon = std::make_shared<MarkerIconResource>(_markerPack, appearance.iconPath);
+                _markerIcons[appearance.iconPath] = icon;
+            }
+        }
+    }
+    _markers[id] = {x, y, std::move(appearance), std::move(icon)};
 }
 
 void MapWidget::clearMarker(const std::string& id)
