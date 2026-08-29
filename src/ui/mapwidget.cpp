@@ -462,8 +462,8 @@ void MapWidget::render(Renderer renderer, const int offX, const int offY)
 
     std::vector<decltype(_markers)::iterator> markers;
     markers.reserve(_markers.size());
-    for (auto marker = _markers.begin(); marker != _markers.end(); ++marker)
-        markers.push_back(marker);
+    for (auto markerIt = _markers.begin(); markerIt != _markers.end(); ++markerIt)
+        markers.push_back(markerIt);
     std::sort(markers.begin(), markers.end(), [](const auto& left, const auto& right) {
         return left->second.order < right->second.order;
     });
