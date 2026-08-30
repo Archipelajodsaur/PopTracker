@@ -649,7 +649,9 @@ The following hint names are defined:
   the hint updates every visible instance of the named map, available since 0.36.0.
 
 To set or replace a marker, provide an id and finite image-space coordinates. An optional `label` is shown after
-the standard tooltip delay when hovering the marker. Empty or omitted labels show no tooltip:
+the standard tooltip delay when hovering the marker. If multiple markers overlap the pointer, their non-empty
+labels are shown together in one tooltip, ordered from the topmost marker to the bottommost. Empty or omitted
+labels contribute no text:
 
 ```json
 {
@@ -708,8 +710,9 @@ explicit removal object:
 
 Marker ids must be non-empty strings. Set operations require both `x` and `y`; `label`, when provided, must be a
 string. Labels support normal JSON text (including commas and UTF-8) and replace the prior label along with the
-rest of the marker. Marker labels use the marker's rendered diamond or icon bounds for hover, take precedence over
-location hover, and disappear when the pointer leaves or the marker is moved, replaced, removed, or reset. Tooltip
+rest of the marker. Marker hitboxes use the marker's rendered diamond or icon bounds and take precedence over
+location hover even when every hit marker has an empty label. Marker tooltips disappear when the pointer leaves or
+a marker is moved, replaced, removed, or reset. Tooltip
 placement is kept within the tracker view. `appearance`, when provided, is either a `"diamond"` with an optional
 valid `color`, or an `"icon"` with required `path` and optional `size`.
 Icon appearances do not accept `color`. Unrecognized fields are ignored. Wrong field types, non-finite or

@@ -476,8 +476,8 @@ void MapWidget::render(Renderer renderer, const int offX, const int offY)
         const bool iconRendered = iconTexture && iconSize.width > 0 && iconSize.height > 0;
         if (marker.iconRendered != iconRendered) {
             marker.iconRendered = iconRendered;
-            if (_markerHover && *_markerHover == markerIt->first)
-                _markerHoverInvalidated = markerIt->first;
+            if (std::find(_markerHover.begin(), _markerHover.end(), markerIt->first) != _markerHover.end())
+                _markerHoverInvalidated = true;
         }
         if (iconRendered) {
             SDL_FRect destination;
@@ -726,40 +726,49 @@ void MapWidget::clearMarkers()
 bool MapWidget::updateMarkerHover(const int x, const int y, const int absX, const int absY, const SDL_Rect& srcRect,
         const SDL_FRect& dstRect)
 {
-    const Marker* hovered = nullptr;
-    const std::string* id = nullptr;
-    for (const auto& pair : _markers) {
-        if (isMarkerHit(pair.second, x, y, srcRect, dstRect) && (!hovered || pair.second.order > hovered->order)) {
-            hovered = &pair.second;
-            id = &pair.first;
-        }
+    std::vector<decltype(_markers)::const_iterator> hovered;
+    for (auto markerIt = _markers.cbegin(); markerIt != _markers.cend(); ++markerIt) {
+        if (isMarkerHit(markerIt->second, x, y, srcRect, dstRect))
+            hovered.push_back(markerIt);
     }
-    if (!hovered) {
+    if (hovered.empty()) {
         clearMarkerHover();
         return false;
     }
-    if (*id != _markerHover) {
-        _markerHover = *id;
-        onMarkerHover.emit(this, *_markerHover, hovered->label, absX, absY);
+    std::sort(hovered.begin(), hovered.end(), [](const auto& left, const auto& right) {
+        return left->second.order > right->second.order;
+    });
+
+    std::vector<std::string> ids;
+    ids.reserve(hovered.size());
+    for (const auto markerIt : hovered)
+        ids.push_back(markerIt->first);
+    if (ids != _markerHover) {
+        _markerHover = std::move(ids);
+        std::vector<MarkerHover> markers;
+        markers.reserve(hovered.size());
+        for (const auto markerIt : hovered)
+            markers.push_back({markerIt->first, markerIt->second.label});
+        onMarkerHover.emit(this, markers, absX, absY);
     }
     return true;
 }
 
 void MapWidget::clearMarkerHover()
 {
-    _markerHoverInvalidated.reset();
-    if (!_markerHover)
+    _markerHoverInvalidated = false;
+    if (_markerHover.empty())
         return;
-    _markerHover.reset();
-    onMarkerHover.emit(this, "", "", 0, 0);
+    _markerHover.clear();
+    onMarkerHover.emit(this, {}, 0, 0);
 }
 
-std::optional<std::string> MapWidget::takeMarkerHoverInvalidation()
+bool MapWidget::takeMarkerHoverInvalidation()
 {
-    const auto invalidated = std::move(_markerHoverInvalidated);
-    _markerHoverInvalidated.reset();
-    if (invalidated && _markerHover && *_markerHover == *invalidated)
-        _markerHover.reset();
+    const bool invalidated = _markerHoverInvalidated;
+    _markerHoverInvalidated = false;
+    if (invalidated)
+        _markerHover.clear();
     return invalidated;
 }
 

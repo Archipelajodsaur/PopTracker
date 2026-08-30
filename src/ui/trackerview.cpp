@@ -490,7 +490,7 @@ void TrackerView::render(Renderer renderer, int offX, int offY)
         _tooltipTriggered = true;
         onItemTooltip.emit(this, _tooltipItem);
     }
-    if (!_markerTooltipTriggered && _markerTooltipOwner && !_markerTooltipLabel.empty() &&
+    if (!_markerTooltipTriggered && _markerTooltipOwner && !_markerTooltipText.empty() &&
             elapsed(_markerTooltipTimer, Tooltip::delay)) {
         _markerTooltipTriggered = true;
         showMarkerTooltip();
@@ -598,8 +598,7 @@ void TrackerView::updateLayout(const std::string& layout)
     _mapTooltipOwner = nullptr;
     _markerTooltip = nullptr;
     _markerTooltipOwner = nullptr;
-    _markerTooltipName.clear();
-    _markerTooltipLabel.clear();
+    _markerTooltipText.clear();
     _markerTooltipTimer = 0;
     _markerTooltipTriggered = false;
     _items.clear();
@@ -731,8 +730,7 @@ void TrackerView::closeMapTooltip()
 void TrackerView::closeMarkerTooltip()
 {
     _markerTooltipOwner = nullptr;
-    _markerTooltipName.clear();
-    _markerTooltipLabel.clear();
+    _markerTooltipText.clear();
     _markerTooltipTimer = 0;
     _markerTooltipTriggered = false;
     if (!_markerTooltip)
@@ -747,9 +745,9 @@ void TrackerView::closeMarkerTooltip()
 
 void TrackerView::showMarkerTooltip()
 {
-    if (!_markerTooltipOwner || _markerTooltipLabel.empty())
+    if (!_markerTooltipOwner || _markerTooltipText.empty())
         return;
-    auto* tooltip = new Tooltip(_font, _markerTooltipLabel, _size);
+    auto* tooltip = new Tooltip(_font, _markerTooltipText, _size);
     tooltip->setMinSize({0, 0});
     tooltip->setHeight(std::min(tooltip->getHeight(), _size.height));
     const int left = _markerTooltipPos.left - _absX + Tooltip::OFFSET;
@@ -775,8 +773,7 @@ void TrackerView::closeInvalidMarkerTooltips()
 {
     for (const auto& pair : _maps) {
         for (auto* map : pair.second) {
-            const auto invalidated = map->takeMarkerHoverInvalidation();
-            if (invalidated && _markerTooltipOwner == map && _markerTooltipName == *invalidated)
+            if (map->takeMarkerHoverInvalidation() && _markerTooltipOwner == map)
                 closeMarkerTooltip();
         }
     }
@@ -1185,16 +1182,25 @@ bool TrackerView::addLayoutNode(Container* container, const LayoutNode& node, si
                 }
             }};
 
-            w->onMarkerHover += { this, [this](void* sender, const std::string& id, const std::string& label,
+            w->onMarkerHover += { this, [this](void* sender, const std::vector<MapWidget::MarkerHover>& markers,
                     const int absX, const int absY) {
-                if (!id.empty())
+                if (!markers.empty())
                     closeMapTooltip();
                 closeMarkerTooltip();
-                if (id.empty() || label.empty())
+                if (markers.empty())
                     return;
                 _markerTooltipOwner = static_cast<MapWidget*>(sender);
-                _markerTooltipName = id;
-                _markerTooltipLabel = label;
+                for (const auto& marker : markers) {
+                    if (marker.label.empty())
+                        continue;
+                    if (!_markerTooltipText.empty())
+                        _markerTooltipText += '\n';
+                    _markerTooltipText += marker.label;
+                }
+                if (_markerTooltipText.empty()) {
+                    _markerTooltipOwner = nullptr;
+                    return;
+                }
                 _markerTooltipPos = {absX, absY};
                 _markerTooltipTimer = getTicks();
             }};
