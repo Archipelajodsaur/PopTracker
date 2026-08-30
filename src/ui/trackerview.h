@@ -15,6 +15,8 @@
 
 namespace Ui {
 
+class Tooltip;
+
 class TrackerView : public SimpleContainer {
 public:
     using FONT = Group::FONT;
@@ -57,6 +59,12 @@ protected:
     MapWidget *_mapTooltipOwner = nullptr;
     std::string _mapTooltipName;
     std::map<std::string, int> _mapTooltipScrollOffsets;
+    Tooltip *_markerTooltip = nullptr;
+    MapWidget *_markerTooltipOwner = nullptr;
+    Position _markerTooltipPos;
+    std::string _markerTooltipText;
+    tick_t _markerTooltipTimer = 0;
+    bool _markerTooltipTriggered = false;
     std::string _tooltipItem;
     tick_t _tooltipTimer = 0;
     bool _tooltipTriggered = false;
@@ -86,6 +94,11 @@ protected:
     void updateLocationNow(const std::string& location);
     void updateMapTooltip();
     void updateMapTooltipNow();
+    void closeMapTooltip();
+    void closeMarkerTooltip();
+    void showMarkerTooltip();
+    void disconnectMapSignals();
+    void closeInvalidMarkerTooltips();
     void updateItem(Item* w, const BaseItem& item);
 
     size_t addLayoutNodes(Container* container, const std::list<LayoutNode>& nodes, size_t depth=0);

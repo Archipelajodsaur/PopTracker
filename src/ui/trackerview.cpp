@@ -1,7 +1,7 @@
 #include "trackerview.h"
-#include <cerrno>
+#include <algorithm>
 #include <cmath>
-#include <cstdlib>
+#include <limits>
 #include <string>
 #include <vector>
 #include <fmt/format.h>
@@ -31,7 +31,7 @@ constexpr int TOOL_MAX_DISPLACEMENT=5; // can be off by this amount
 
 enum class MapMarkerHintAction {
     INVALID,
-    CLEAR,
+    REMOVE,
     SET,
 };
 
@@ -40,44 +40,120 @@ struct MapMarkerHint {
     std::string id;
     float x = 0.0f;
     float y = 0.0f;
+    MapWidget::MarkerAppearance appearance;
+    std::string label;
 };
 
-static bool parseMapMarkerCoordinate(const std::string& field, float& result)
+static bool parseMapMarkerCoordinate(const nlohmann::json& field, float& result)
 {
-    if (field.empty())
+    if (!field.is_number())
+        return false;
+    const double number = field.get<double>();
+    if (!std::isfinite(number) || number < -std::numeric_limits<float>::max() ||
+            number > std::numeric_limits<float>::max())
+        return false;
+    result = static_cast<float>(number);
+    return std::isfinite(result);
+}
+
+static bool parseMapMarkerPosition(const nlohmann::json& json, float& x, float& y)
+{
+    const auto xValue = json.find("x");
+    const auto yValue = json.find("y");
+    return xValue != json.end() && yValue != json.end() &&
+        parseMapMarkerCoordinate(*xValue, x) && parseMapMarkerCoordinate(*yValue, y);
+}
+
+static bool isMapMarkerColor(const std::string& color)
+{
+    if (color.size() != 7 && color.size() != 9)
+        return false;
+    return color.front() == '#' && std::all_of(color.begin() + 1, color.end(), [](const unsigned char c) {
+        return std::isxdigit(c) != 0;
+    });
+}
+
+static bool parseMapMarkerAppearance(const nlohmann::json& json, MapWidget::MarkerAppearance& result)
+{
+    const auto appearance = json.find("appearance");
+    if (appearance == json.end())
+        return true;
+    if (!appearance->is_object())
         return false;
 
-    errno = 0;
-    char* end = nullptr;
-    const float value = std::strtof(field.c_str(), &end);
-    if (end == field.c_str() || *end != '\0' || errno == ERANGE || !std::isfinite(value))
+    const auto type = appearance->find("type");
+    if (type == appearance->end() || !type->is_string())
+        return false;
+    if (type->get_ref<const std::string&>() == "diamond") {
+        const auto color = appearance->find("color");
+        if (color == appearance->end())
+            return true;
+        if (!color->is_string() || !isMapMarkerColor(color->get_ref<const std::string&>()))
+            return false;
+        result.color = Widget::Color(color->get<std::string>());
+        return true;
+    }
+    if (type->get_ref<const std::string&>() != "icon" || appearance->find("color") != appearance->end())
         return false;
 
-    result = value;
+    const auto path = appearance->find("path");
+    if (path == appearance->end() || !path->is_string() ||
+            path->get_ref<const std::string&>().empty())
+        return false;
+    result.type = MapWidget::MarkerAppearance::Type::ICON;
+    result.iconPath = path->get<std::string>();
+
+    const auto size = appearance->find("size");
+    if (size == appearance->end())
+        return true;
+    if (!size->is_number_integer() && !size->is_number_unsigned())
+        return false;
+    const int64_t value = size->get<int64_t>();
+    if (value < 1 || value > 4096)
+        return false;
+    result.iconSize = static_cast<int>(value);
     return true;
 }
 
 static MapMarkerHint parseMapMarkerHint(const std::string& value)
 {
-    const size_t firstComma = value.find(',');
-    if (firstComma == std::string::npos)
-        return value.empty() ? MapMarkerHint{} : MapMarkerHint{MapMarkerHintAction::CLEAR, value};
+    try {
+        const auto json = nlohmann::json::parse(value, nullptr, false);
+        if (json.is_discarded() || !json.is_object())
+            return {};
 
-    const size_t secondComma = value.find(',', firstComma + 1);
-    if (firstComma == 0 || secondComma == std::string::npos ||
-            value.find(',', secondComma + 1) != std::string::npos) {
+        const auto id = json.find("id");
+        if (id == json.end() || !id->is_string() || id->get_ref<const std::string&>().empty())
+            return {};
+
+        MapMarkerHint hint;
+        hint.id = id->get<std::string>();
+
+        const auto remove = json.find("remove");
+        if (remove != json.end()) {
+            if (!remove->is_boolean() || !remove->get<bool>() || json.count("x") || json.count("y") ||
+                    json.count("appearance") || json.count("label"))
+                return {};
+            hint.action = MapMarkerHintAction::REMOVE;
+            return hint;
+        }
+
+        if (!parseMapMarkerPosition(json, hint.x, hint.y) ||
+                !parseMapMarkerAppearance(json, hint.appearance))
+            return {};
+
+        const auto label = json.find("label");
+        if (label != json.end()) {
+            if (!label->is_string())
+                return {};
+            hint.label = label->get<std::string>();
+        }
+
+        hint.action = MapMarkerHintAction::SET;
+        return hint;
+    } catch (...) {
         return {};
     }
-
-    MapMarkerHint hint;
-    hint.id = value.substr(0, firstComma);
-    if (!parseMapMarkerCoordinate(value.substr(firstComma + 1, secondComma - firstComma - 1), hint.x) ||
-        !parseMapMarkerCoordinate(value.substr(secondComma + 1), hint.y)) {
-        return {};
-    }
-
-    hint.action = MapMarkerHintAction::SET;
-    return hint;
 }
 
 static std::list<ImageFilter> imageModsToFilters(const Tracker* tracker, const std::list<std::string>& mods)
@@ -376,6 +452,9 @@ TrackerView::TrackerView(int x, int y, int w, int h, Tracker* tracker, const std
 
 TrackerView::~TrackerView()
 {
+    disconnectMapSignals();
+    closeMarkerTooltip();
+    closeMapTooltip();
     _tracker->onLayoutChanged -= this;
     _tracker->onStateChanged -= this;
     _tracker->onDisplayChanged -= this;
@@ -406,9 +485,15 @@ void TrackerView::relayout()
 
 void TrackerView::render(Renderer renderer, int offX, int offY)
 {
+    closeInvalidMarkerTooltips();
     if (!_tooltipTriggered && !_tooltipItem.empty() && elapsed(_tooltipTimer, Tooltip::delay)) {
         _tooltipTriggered = true;
         onItemTooltip.emit(this, _tooltipItem);
+    }
+    if (!_markerTooltipTriggered && _markerTooltipOwner && !_markerTooltipText.empty() &&
+            elapsed(_markerTooltipTimer, Tooltip::delay)) {
+        _markerTooltipTriggered = true;
+        showMarkerTooltip();
     }
     if (_relayoutRequired) {
         auto oldSize = _size;
@@ -508,8 +593,14 @@ void TrackerView::updateLayout(const std::string& layout)
     
     // clear ui
     _tracker->onUiHint -= this;
+    disconnectMapSignals();
     _mapTooltip = nullptr;
     _mapTooltipOwner = nullptr;
+    _markerTooltip = nullptr;
+    _markerTooltipOwner = nullptr;
+    _markerTooltipText.clear();
+    _markerTooltipTimer = 0;
+    _markerTooltipTriggered = false;
     _items.clear();
     _maps.clear();
     _mapsDirty = false;
@@ -616,6 +707,76 @@ void TrackerView::updateMapTooltipNow()
         }
     }
     _mapTooltipDirty = false;
+}
+
+void TrackerView::closeMapTooltip()
+{
+    if (!_mapTooltip)
+        return;
+    _mapTooltipScrollOffsets[_mapTooltipName] = _mapTooltip->getScrollY();
+    _mapTooltipOwner = nullptr;
+    if (_hoverChild == _mapTooltip)
+        _hoverChild = nullptr;
+    _mapTooltip->onMouseLeave -= this;
+    _mapTooltip->onClick -= this;
+    removeChild(_mapTooltip);
+    if (!_mapTooltip)
+        return;
+    const auto tooltip = _mapTooltip;
+    _mapTooltip = nullptr;
+    delete tooltip;
+}
+
+void TrackerView::closeMarkerTooltip()
+{
+    _markerTooltipOwner = nullptr;
+    _markerTooltipText.clear();
+    _markerTooltipTimer = 0;
+    _markerTooltipTriggered = false;
+    if (!_markerTooltip)
+        return;
+    if (_hoverChild == _markerTooltip)
+        _hoverChild = nullptr;
+    removeChild(_markerTooltip);
+    const auto tooltip = _markerTooltip;
+    _markerTooltip = nullptr;
+    delete tooltip;
+}
+
+void TrackerView::showMarkerTooltip()
+{
+    if (!_markerTooltipOwner || _markerTooltipText.empty())
+        return;
+    auto* tooltip = new Tooltip(_font, _markerTooltipText, _size);
+    tooltip->setMinSize({0, 0});
+    tooltip->setHeight(std::min(tooltip->getHeight(), _size.height));
+    const int left = _markerTooltipPos.left - _absX + Tooltip::OFFSET;
+    const int top = _markerTooltipPos.top - _absY + Tooltip::OFFSET;
+    tooltip->setLeft(std::clamp(left, 0, std::max(0, _size.width - tooltip->getWidth())));
+    tooltip->setTop(std::clamp(top, 0, std::max(0, _size.height - tooltip->getHeight())));
+    _markerTooltip = tooltip;
+    addChild(_markerTooltip);
+}
+
+void TrackerView::disconnectMapSignals()
+{
+    for (const auto& pair : _maps) {
+        for (auto* map : pair.second) {
+            map->onLocationHover -= this;
+            map->onMarkerHover -= this;
+            map->onDestroy -= this;
+        }
+    }
+}
+
+void TrackerView::closeInvalidMarkerTooltips()
+{
+    for (const auto& pair : _maps) {
+        for (auto* map : pair.second) {
+            if (map->consumeMarkerHoverInvalidation() && _markerTooltipOwner == map)
+                closeMarkerTooltip();
+        }
+    }
 }
 
 void TrackerView::updateDisplay(const std::string& itemid)
@@ -965,6 +1126,7 @@ bool TrackerView::addLayoutNode(Container* container, const LayoutNode& node, si
             const auto& map = _tracker->getMap(mapname);
             const auto& f = map.getImage();
             auto *w = new MapWidget(0,0,0,0, std::make_unique<PackImageFuture>(_tracker->getPack(), f));
+            w->setMarkerPack(_tracker->getPack());
             w->setDropShaodw(node.getDropShadow(container->getDropShadow()));
             w->setHideClearedLocations(_hideClearedLocations);
             w->setHideUnreachableLocations(_hideUnreachableLocations);
@@ -1013,34 +1175,47 @@ bool TrackerView::addLayoutNode(Container* container, const LayoutNode& node, si
                         (name.substr(10) == mapname || name.substr(10) == numberedMapName)) {
                     const MapMarkerHint hint = parseMapMarkerHint(value);
                     if (hint.action == MapMarkerHintAction::SET) {
-                        w->setMarker(hint.id, hint.x, hint.y);
-                    } else if (hint.action == MapMarkerHintAction::CLEAR) {
+                        w->setMarker(hint.id, hint.x, hint.y, hint.appearance, hint.label);
+                    } else if (hint.action == MapMarkerHintAction::REMOVE) {
                         w->clearMarker(hint.id);
                     }
                 }
+            }};
+
+            w->onMarkerHover += { this, [this](void* sender, const std::vector<MapWidget::MarkerHover>& markers,
+                    const int absX, const int absY) {
+                if (!markers.empty())
+                    closeMapTooltip();
+                closeMarkerTooltip();
+                if (markers.empty())
+                    return;
+                _markerTooltipOwner = static_cast<MapWidget*>(sender);
+                for (const auto& marker : markers) {
+                    if (marker.label.empty())
+                        continue;
+                    if (!_markerTooltipText.empty())
+                        _markerTooltipText += '\n';
+                    _markerTooltipText += marker.label;
+                }
+                if (_markerTooltipText.empty()) {
+                    _markerTooltipOwner = nullptr;
+                    return;
+                }
+                _markerTooltipPos = {absX, absY};
+                _markerTooltipTimer = getTicks();
+            }};
+            w->onDestroy += { this, [this, w](void*) {
+                if (_markerTooltipOwner == w)
+                    closeMarkerTooltip();
+                if (_mapTooltipOwner == w)
+                    closeMapTooltip();
             }};
 
             w->onLocationHover += { this, [this](void* sender, std::string locid, int absX, int absY) {
                 // TODO: move this somewhere to increase readability
                 // TODO: if tooltip is the same, just move it
                 MapWidget *map = static_cast<MapWidget*>(sender);
-                if (_mapTooltip) {
-                    _mapTooltipScrollOffsets[_mapTooltipName] = _mapTooltip->getScrollY();
-                    // remove references to old tooltip
-                    _mapTooltipOwner = nullptr;
-                    if (_hoverChild == _mapTooltip) _hoverChild = nullptr;
-                    _mapTooltip->onMouseLeave -= this;
-                    _mapTooltip->onClick -= this;
-                    // remove child from container
-                    removeChild(_mapTooltip);
-                    // removing a child may fire a signal, so we need to make sure not to double-free
-                    if (_mapTooltip) {
-                        // run destructor after removing reference since delete may also fire
-                        auto tmp = _mapTooltip;
-                        _mapTooltip = nullptr;
-                        delete tmp;
-                    }
-                }
+                closeMapTooltip();
 
                 // create tooltip
                 _mapTooltipOwner = map;

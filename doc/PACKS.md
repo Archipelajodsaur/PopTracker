@@ -642,13 +642,80 @@ The following hint names are defined:
 * `"Zoom <MapName>[<n>]"`: same as above but for the nth instance starting at 0, since 0.34.0
 * `"Pan <MapName>"`: value = `"<center_x>,<center_y>"`, pan map to put specific pixel in the center, since 0.34.0
 * `"Pan <MapName>[<n>]"`: same as above but for the nth instance starting at 0, since 0.34.0
-* `"MapMarker <MapName>"`: value = `"<id>,<x>,<y>"` sets or moves the marker with id at the
-  image-space pixel coordinates x,y; value = `"<id>"` removes that marker. The marker remains a fixed
-  12-by-12 screen pixels while its center follows the map's zoom and pan, available since 0.36.0.
+* `"MapMarker <MapName>"`: value is a JSON object that sets, moves, or removes a transient marker. The
+  marker remains a fixed 12-by-12 screen pixels while its center follows the map's zoom and pan, available
+  since 0.36.0.
 * `"MapMarker <MapName>[<n>]"`: same as above but for the nth instance starting at 0. Without `[<n>]`,
   the hint updates every visible instance of the named map, available since 0.36.0.
 
-Marker coordinates may be fractional or outside the map image. Markers are transient UI state: they are
-cleared by `reset`, are not saved, and must be republished after a layout rebuild. Empty ids, ids containing
-commas, and values that are not exactly `"<id>"` or `"<id>,<x>,<y>"` with finite numeric coordinates are
-ignored without changing existing markers, available since 0.36.0.
+To set or replace a marker, provide an id and finite image-space coordinates. An optional `label` is shown after
+the standard tooltip delay when hovering the marker. If multiple markers overlap the pointer, their non-empty
+labels are shown together in one tooltip, ordered from the topmost marker to the bottommost. Empty or omitted
+labels contribute no text:
+
+```json
+{
+  "id": "player",
+  "x": 414.5,
+  "y": 200.25,
+  "label": "Player 1"
+}
+```
+
+The default appearance is a white diamond with a black border. A diamond may specify a fill color:
+
+```json
+{
+  "id": "player",
+  "x": 414.5,
+  "y": 200.25,
+  "appearance": {
+    "type": "diamond",
+    "color": "#ff0000"
+  }
+}
+```
+
+An icon's `path` is a non-empty string naming a pack-relative image. The path is resolved by the active pack,
+including its normal path safety checks, selected variant, and overrides, so icon markers work with both directory
+and ZIP-pack distributions. `size` is an optional positive integer that defaults to 16. It is a fixed screen-pixel
+bounding box: the image keeps its aspect ratio, is centered on the marker coordinates, and does not scale with map
+zoom.
+
+```json
+{
+  "id": "player",
+  "x": 414.5,
+  "y": 200.25,
+  "appearance": {
+    "type": "icon",
+    "path": "images/player.png",
+    "size": 16
+  }
+}
+```
+
+Transparent icon pixels remain transparent. While an icon is loading, or if the image cannot be loaded, the
+default white diamond is drawn instead. Replacing a marker with the same icon path reuses its loaded resource.
+
+Colors are `#RRGGBB` or `#AARRGGBB`; the eight-digit form uses alpha first. To remove one marker, use an
+explicit removal object:
+
+```json
+{
+  "id": "player",
+  "remove": true
+}
+```
+
+Marker ids must be non-empty strings. Set operations require both `x` and `y`; `label`, when provided, must be a
+string. Labels support normal JSON text (including commas and UTF-8) and replace the prior label along with the
+rest of the marker. Marker hitboxes use the marker's rendered diamond or icon bounds and take precedence over
+location hover even when every hit marker has an empty label. Marker tooltips disappear when the pointer leaves or
+a marker is moved, replaced, removed, or reset. Tooltip
+placement is kept within the tracker view. `appearance`, when provided, is either a `"diamond"` with an optional
+valid `color`, or an `"icon"` with required `path` and optional `size`.
+Icon appearances do not accept `color`. Unrecognized fields are ignored. Wrong field types, non-finite or
+out-of-range coordinates, non-positive or unsafe icon sizes, unsupported appearances, and malformed objects are
+ignored without changing existing marker state. Markers are transient UI state: they are cleared by `reset`, are
+not saved, and must be republished after a layout rebuild.
