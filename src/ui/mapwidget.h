@@ -59,6 +59,11 @@ public:
         bool iconRendered = false;
     };
 
+    struct MarkerHover {
+        std::string id;
+        std::string label;
+    };
+
     // TODO: enum location state
     void addLocation(const std::string& name, Point&& point);
     void setLocationState(const std::string& name, int state, size_t n);
@@ -69,11 +74,11 @@ public:
     void clearMarker(const std::string& id);
     void clearMarkers();
     void setMarkerPack(const Pack* pack) { _markerPack = pack; }
-    std::optional<std::string> takeMarkerHoverInvalidation();
+    bool consumeMarkerHoverInvalidation();
 
     // FIXME: this does not work if name is not unique
     Signal<const std::string&,int,int> onLocationHover; // FIXME: we should provide absolute AND relative mouse position through the Event stack
-    Signal<const std::string&,const std::string&,int,int> onMarkerHover;
+    Signal<const std::vector<MarkerHover>&,int,int> onMarkerHover;
 
     void render(Renderer renderer, int offX, int offY) override;
     int getAbsLeft() const { return _absX; } // FIXME: this is not really a good solution
@@ -100,8 +105,8 @@ protected:
     std::map<std::string, Marker> _markers;
     std::map<std::string, std::weak_ptr<MarkerIconResource>> _markerIcons;
     std::optional<std::string> _locationHover; // TODO: store iterator instead of string?
-    std::optional<std::string> _markerHover;
-    std::optional<std::string> _markerHoverInvalidated;
+    std::vector<std::string> _markerHover;
+    bool _markerHoverInvalidated = false;
     size_t _nextMarkerOrder = 0;
 
     bool _hideClearedLocations = false;

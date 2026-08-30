@@ -62,8 +62,7 @@ protected:
     Tooltip *_markerTooltip = nullptr;
     MapWidget *_markerTooltipOwner = nullptr;
     Position _markerTooltipPos;
-    std::string _markerTooltipName;
-    std::string _markerTooltipLabel;
+    std::string _markerTooltipText;
     tick_t _markerTooltipTimer = 0;
     bool _markerTooltipTriggered = false;
     std::string _tooltipItem;

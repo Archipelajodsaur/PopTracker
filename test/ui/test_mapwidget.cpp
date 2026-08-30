@@ -326,8 +326,11 @@ TEST(MapWidgetMarker, LabelHoverUsesRenderedFootprintsAndTopmostMarker)
     };
     std::vector<Hover> hovers;
     std::vector<std::string> locationHovers;
-    widget.onMarkerHover += {&widget, [&hovers](void*, const std::string& id, const std::string& label, int, int) {
-        hovers.push_back({id, label});
+    widget.onMarkerHover += {&widget, [&hovers](void*, const std::vector<Ui::MapWidget::MarkerHover>& markers, int, int) {
+        if (markers.empty())
+            hovers.push_back({});
+        else
+            hovers.push_back({markers.front().id, markers.front().label});
     }};
     widget.onLocationHover += {&widget, [&locationHovers](void*, const std::string& id, int, int) {
         locationHovers.push_back(id);
@@ -379,7 +382,7 @@ TEST(MapWidgetMarker, LabelHoverUsesRenderedFootprintsAndTopmostMarker)
     ASSERT_FALSE(hovers.empty());
     EXPECT_TRUE(hovers.back().id.empty());
 
-    // A marker inserted above an already-hovered marker owns hover on the next hit test.
+    // A marker inserted above an already-hovered marker is reported first on the next hit test.
     widget.clearMarkers();
     widget.setMarker("bottom", 414.0f, 200.0f, {}, "bottom label");
     widget.onMouseMove.emit(&widget, 103, 50, 0);
@@ -392,6 +395,17 @@ TEST(MapWidgetMarker, LabelHoverUsesRenderedFootprintsAndTopmostMarker)
     ASSERT_FALSE(hovers.empty());
     EXPECT_EQ(hovers.back().id, "top");
     EXPECT_EQ(hovers.back().label, "top label");
+
+    // An unlabeled marker still suppresses location hover.
+    widget.clearMarkers();
+    hovers.clear();
+    locationHovers.clear();
+    widget.setMarker("unlabeled", 414.0f, 200.0f);
+    widget.onMouseMove.emit(&widget, 103, 50, 0);
+    ASSERT_FALSE(hovers.empty());
+    EXPECT_EQ(hovers.back().id, "unlabeled");
+    EXPECT_TRUE(hovers.back().label.empty());
+    EXPECT_TRUE(locationHovers.empty());
 }
 
 TEST(MapWidgetMarker, LabelHoverClearsOnMarkerChangesMouseLeaveAndDragging)
@@ -401,8 +415,8 @@ TEST(MapWidgetMarker, LabelHoverClearsOnMarkerChangesMouseLeaveAndDragging)
     output.render(widget);
 
     std::vector<std::string> hoverIds;
-    widget.onMarkerHover += {&widget, [&hoverIds](void*, const std::string& id, const std::string&, int, int) {
-        hoverIds.push_back(id);
+    widget.onMarkerHover += {&widget, [&hoverIds](void*, const std::vector<Ui::MapWidget::MarkerHover>& markers, int, int) {
+        hoverIds.push_back(markers.empty() ? "" : markers.front().id);
     }};
     const auto expectHover = [&widget, &hoverIds] {
         widget.onMouseMove.emit(&widget, 103, 50, 0);
@@ -457,6 +471,36 @@ TEST(MapWidgetMarker, LabelHoverClearsOnMarkerChangesMouseLeaveAndDragging)
     expectCleared();
 }
 
+TEST(MapWidgetMarker, LabelHoverGroupsOverlappingMarkersAndTracksPartialChanges)
+{
+    SoftwareRenderer output;
+    Ui::MapWidget widget(0, 0, 207, 100, IMAGE_PATH);
+    output.render(widget);
+
+    std::vector<std::vector<Ui::MapWidget::MarkerHover>> hovers;
+    widget.onMarkerHover += {&widget, [&hovers](void*, const std::vector<Ui::MapWidget::MarkerHover>& markers,
+            int, int) {
+        hovers.push_back(markers);
+    }};
+
+    widget.setMarker("left", 414.0f, 200.0f, {}, "left label");
+    widget.setMarker("right", 438.0f, 200.0f, {}, "");
+
+    // Both diamonds overlap here; later markers are rendered and reported first.
+    widget.onMouseMove.emit(&widget, 103, 50, 0);
+    ASSERT_FALSE(hovers.empty());
+    ASSERT_EQ(hovers.back().size(), 2);
+    EXPECT_EQ(hovers.back()[0].id, "right");
+    EXPECT_TRUE(hovers.back()[0].label.empty());
+    EXPECT_EQ(hovers.back()[1].id, "left");
+    EXPECT_EQ(hovers.back()[1].label, "left label");
+
+    // Leaving only one member rebuilds the explicit hover group.
+    widget.onMouseMove.emit(&widget, 112, 50, 0);
+    ASSERT_EQ(hovers.back().size(), 1);
+    EXPECT_EQ(hovers.back()[0].id, "right");
+}
+
 TEST(MapWidgetMarker, IconHoverShrinksFromLoadingFallbackToReadyFootprint)
 {
     SoftwareRenderer output;
@@ -467,8 +511,8 @@ TEST(MapWidgetMarker, IconHoverShrinksFromLoadingFallbackToReadyFootprint)
     output.render(widget);
 
     std::vector<std::string> hoverIds;
-    widget.onMarkerHover += {&widget, [&hoverIds](void*, const std::string& id, const std::string&, int, int) {
-        hoverIds.push_back(id);
+    widget.onMarkerHover += {&widget, [&hoverIds](void*, const std::vector<Ui::MapWidget::MarkerHover>& markers, int, int) {
+        hoverIds.push_back(markers.empty() ? "" : markers.front().id);
     }};
     Ui::MapWidget::MarkerAppearance icon;
     icon.type = Ui::MapWidget::MarkerAppearance::Type::ICON;
@@ -489,6 +533,33 @@ TEST(MapWidgetMarker, IconHoverShrinksFromLoadingFallbackToReadyFootprint)
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     ADD_FAILURE() << "ready icon did not shrink its hover footprint within 1 second";
+}
+
+TEST(MapWidgetMarker, IconFootprintInvalidatesAnOverlappingHoverGroup)
+{
+    SoftwareRenderer output;
+    Pack pack(ICON_PACK_PATH);
+    pack.setVariant("standard");
+    Ui::MapWidget widget(0, 0, 207, 100, IMAGE_PATH);
+    widget.setMarkerPack(&pack);
+    output.render(widget);
+
+    Ui::MapWidget::MarkerAppearance icon;
+    icon.type = Ui::MapWidget::MarkerAppearance::Type::ICON;
+    icon.iconPath = "images/items/toggle.png";
+    icon.iconSize = 16;
+    widget.setMarker("diamond", 414.0f, 200.0f, {}, "diamond label");
+    widget.setMarker("icon", 414.0f, 200.0f, icon, "icon label");
+
+    // This is within both fallback diamonds, but outside the ready icon's shorter footprint.
+    widget.onMouseMove.emit(&widget, 103, 44, 0);
+    for (int i = 0; i < 1000; ++i) {
+        output.render(widget);
+        if (widget.consumeMarkerHoverInvalidation())
+            return;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    ADD_FAILURE() << "ready icon did not invalidate its overlapping hover group within 1 second";
 }
 
 TEST(TrackerViewMapMarkerHint, IconAppearanceLoadsPackRelativeAssetAndReplacesDiamond)
@@ -686,8 +757,11 @@ TEST(TrackerViewMapMarkerHint, LabelsParseAsCompleteReplacementsAndRejectWrongTy
             std::string label;
         };
         std::vector<Hover> hovers;
-        map->onMarkerHover += {map, [&hovers](void*, const std::string& id, const std::string& label, int, int) {
-            hovers.push_back({id, label});
+        map->onMarkerHover += {map, [&hovers](void*, const std::vector<Ui::MapWidget::MarkerHover>& markers, int, int) {
+            if (markers.empty())
+                hovers.push_back({});
+            else
+                hovers.push_back({markers.front().id, markers.front().label});
         }};
         tracker.UiHint("MapMarker map", R"({"id":"player","x":414,"y":200,"label":"Player, 世界"})");
         const std::string marked = output.render(*map);
@@ -774,6 +848,22 @@ TEST(TrackerViewMapMarkerHint, LabelTooltipUsesStandardDelayAndClosesOnUpdates)
         output.render(view);
         ASSERT_NE(view.markerTooltip(), nullptr);
         EXPECT_EQ(view.markerTooltipText(), "first label");
+
+        // Overlapping markers share one tooltip, with topmost labels first and empty labels omitted.
+        tracker.UiHint("MapMarker map", R"({"id":"top","x":414,"y":200,"label":"top label"})");
+        map->onMouseMove.emit(map, markerX, markerY, 0);
+        std::this_thread::sleep_for(std::chrono::milliseconds(Ui::Tooltip::delay + 20));
+        output.render(view);
+        ASSERT_NE(view.markerTooltip(), nullptr);
+        EXPECT_EQ(view.markerTooltipText(), "top label\nfirst label");
+
+        tracker.UiHint("MapMarker map", R"({"id":"top","x":414,"y":200,"label":""})");
+        map->onMouseMove.emit(map, markerX, markerY, 0);
+        std::this_thread::sleep_for(std::chrono::milliseconds(Ui::Tooltip::delay + 20));
+        output.render(view);
+        ASSERT_NE(view.markerTooltip(), nullptr);
+        EXPECT_EQ(view.markerTooltipText(), "first label");
+        tracker.UiHint("MapMarker map", R"({"id":"top","remove":true})");
 
         // A replacement updates the pending tooltip rather than retaining old text.
         tracker.UiHint("MapMarker map", R"({"id":"player","x":414,"y":200,"label":"updated label"})");
