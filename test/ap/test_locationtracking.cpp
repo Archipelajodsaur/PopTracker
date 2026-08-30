@@ -111,7 +111,7 @@ TEST_F(LocationTrackingTest, NilAndInvisibleResultsClearExistingMarkers)
         }
     )");
 
-    ASSERT_TRUE(host->update({}));
+    ASSERT_TRUE(host->update(nlohmann::json::object()));
     ASSERT_TRUE(host->update({{"hidden", true}}));
     ASSERT_TRUE(host->update({{"none", true}}));
     ASSERT_EQ(hints.size(), 2U);
@@ -144,7 +144,7 @@ TEST_F(LocationTrackingTest, RejectsMalformedAndDuplicateMarkersWithoutChangingC
         }
     )");
 
-    ASSERT_TRUE(host->update({}));
+    ASSERT_TRUE(host->update(nlohmann::json::object()));
     const auto initialHints = hints.size();
     EXPECT_FALSE(host->update({{"bad", true}}));
     EXPECT_FALSE(host->update({{"mixed", true}}));
@@ -155,7 +155,7 @@ TEST_F(LocationTrackingTest, RejectsMalformedAndDuplicateMarkersWithoutChangingC
     ASSERT_EQ(hints.size(), initialHints + 1);
     EXPECT_NE(hints.back().second.find("\"remove\":true"), std::string::npos);
 
-    ASSERT_TRUE(host->update({}));
+    ASSERT_TRUE(host->update(nlohmann::json::object()));
     const auto restoredHints = hints.size();
     ASSERT_TRUE(host->update({{"oversized_id", true}}));
     ASSERT_EQ(hints.size(), restoredHints + 1);
