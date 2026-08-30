@@ -300,6 +300,21 @@ NIX_CPP_FLAGS += -mmacosx-version-min=$(DEPLOYMENT_TARGET) -I$(BREW_PREFIX)/opt/
 NIX_LD_FLAGS += -mmacosx-version-min=$(DEPLOYMENT_TARGET) -L$(BREW_PREFIX)/opt/openssl@3.0/lib -L$(BREW_PREFIX)/lib
 NIX_C_FLAGS += -mmacosx-version-min=$(DEPLOYMENT_TARGET) -I$(BREW_PREFIX)/opt/openssl@3.0/include -I$(BREW_PREFIX)/include
 NIX_LUA_C_FLAGS += -mmacosx-version-min=$(DEPLOYMENT_TARGET) -I$(BREW_PREFIX)/opt/openssl@3.0/include -I$(BREW_PREFIX)/include
+# Cross-built Windows executables must use GNU ld options rather than the
+# Darwin-specific flags selected for native macOS builds above.
+ifeq ($(CONF), DEBUG)
+WIN32_LD_FLAGS = -Wl,--gc-sections -fstack-protector-strong -pthread -fno-omit-frame-pointer
+else
+WIN32_LD_FLAGS = -Wl,--gc-sections -fstack-protector-strong -O2 -s -fno-lto -pthread
+endif
+WIN64_LD_FLAGS = $(WIN32_LD_FLAGS)
+# Lua is built as a separate static archive. Keep the Windows cross build out
+# of the native macOS LTO mode so the MinGW linker sees its symbols normally.
+WIN32_CPP_FLAGS += -fno-lto
+WIN64_CPP_FLAGS += -fno-lto
+# Static vcpkg SDL_image and FreeType builds require these transitive archives.
+WIN32_LIBS += -ljpeg -lwebpdemux -lwebp -lsharpyuv -lbrotlidec -lbrotlicommon
+WIN64_LIBS += -ljpeg -lwebpdemux -lwebp -lsharpyuv -lbrotlidec -lbrotlicommon
 else
 HAS_STD_FILESYSTEM ?= true
 endif
@@ -548,13 +563,13 @@ $(NIX_BUILD_DIR)/liblua.a: lib/lua/makefile lib/lua/luaconf.h | $(NIX_BUILD_DIR)
 $(WIN32_BUILD_DIR)/liblua.a: lib/lua/makefile lib/lua/luaconf.h | $(WIN32_BUILD_DIR)
 	mkdir -p $(WIN32_BUILD_DIR)/lib
 	cp -R lib/lua $(WIN32_BUILD_DIR)/lib/
-	(cd $(WIN32_BUILD_DIR)/lib/lua && make -f makefile a CC="$(WIN32CPP)" AR="$(WIN32AR) rc" CFLAGS="$(LUA_C_FLAGS)" MYCFLAGS="" MYLIBS="")
+	(cd $(WIN32_BUILD_DIR)/lib/lua && make -f makefile a CC="$(WIN32CPP)" AR="$(WIN32AR) rc" RANLIB="$(WIN32AR) s" CFLAGS="$(LUA_C_FLAGS)" MYCFLAGS="" MYLIBS="")
 	mv $(WIN32_BUILD_DIR)/lib/lua/$(notdir $@) $@
 	rm -rf $(WIN32_BUILD_DIR)/lib/lua
 $(WIN64_BUILD_DIR)/liblua.a: lib/lua/makefile lib/lua/luaconf.h | $(WIN64_BUILD_DIR)
 	mkdir -p $(WIN64_BUILD_DIR)/lib
 	cp -R lib/lua $(WIN64_BUILD_DIR)/lib/
-	(cd $(WIN64_BUILD_DIR)/lib/lua && make -f makefile a CC="$(WIN64CPP)" AR="$(WIN64AR) rc" CFLAGS="$(LUA_C_FLAGS)" MYCFLAGS="" MYLIBS="")
+	(cd $(WIN64_BUILD_DIR)/lib/lua && make -f makefile a CC="$(WIN64CPP)" AR="$(WIN64AR) rc" RANLIB="$(WIN64AR) s" CFLAGS="$(LUA_C_FLAGS)" MYCFLAGS="" MYLIBS="")
 	mv $(WIN64_BUILD_DIR)/lib/lua/$(notdir $@) $@
 	rm -rf $(WIN64_BUILD_DIR)/lib/lua
 
