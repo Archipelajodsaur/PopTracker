@@ -83,6 +83,8 @@ public:
     Signal<const std::string&> onStateChanged;
     Signal<const std::string&> onDisplayChanged; // changed display of an item
     Signal<const std::string&, const std::string&> onUiHint;
+    /// Emitted after all listeners have received a "reset" UI hint.
+    Signal<> onPostUiHintReset;
     Signal<> onBulkUpdateDone;
 
     const LayoutNode& getLayout(const std::string& name) const;

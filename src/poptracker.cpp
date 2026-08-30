@@ -1166,6 +1166,7 @@ void PopTracker::unloadTracker()
         _ui->destroyWindow(_settings);
         _settings = nullptr;
     }
+    delete _locationTracking;
 #ifndef FIND_LUA_LEAKS // if we don't lua_close at exit, we can use valgrind to see if the allocated memory grew
     if (_L) lua_close(_L);
 #endif
@@ -1180,6 +1181,7 @@ void PopTracker::unloadTracker()
     _scriptHost = nullptr;
     _pack = nullptr;
     _archipelago = nullptr;
+    _locationTracking = nullptr;
 
     _debugFlags = _defaultDebugFlags;
 }
@@ -1371,6 +1373,12 @@ bool PopTracker::loadTracker(const fs::path& pack, const std::string& variant, b
 
     printf("Hooking Lua globals...\n");
     global_wrap(_L, this);
+    // Packs use this gate during init to keep their legacy direct Archipelago
+    // handlers inert only when the complete native host is available.
+    if (at && at->getAP()) {
+        lua_pushboolean(_L, true);
+        lua_setglobal(_L, "LOCATION_TRACKING_HOST");
+    }
     if (_debugFlags.empty()) {
         lua_pushnil(_L);
     } else {
@@ -1435,6 +1443,13 @@ bool PopTracker::loadTracker(const fs::path& pack, const std::string& variant, b
     // run pack's init script
     printf("Running init...\n");
     bool res = _scriptHost->LoadScript("scripts/init.lua");
+    if (res && at && at->getAP()) {
+        _locationTracking = new LocationTracking(_L, at->getAP(), _tracker);
+        if (!_locationTracking->discover()) {
+            delete _locationTracking;
+            _locationTracking = nullptr;
+        }
+    }
     _tracker->updateLuaStableIDs();
     // save reset-state
     StateManager::saveState(_tracker, _scriptHost, _win->getHints(), json::value_t::null, false, "reset");
