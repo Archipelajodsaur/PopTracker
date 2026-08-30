@@ -74,7 +74,7 @@ public:
     void clearMarker(const std::string& id);
     void clearMarkers();
     void setMarkerPack(const Pack* pack) { _markerPack = pack; }
-    bool takeMarkerHoverInvalidation();
+    bool consumeMarkerHoverInvalidation();
 
     // FIXME: this does not work if name is not unique
     Signal<const std::string&,int,int> onLocationHover; // FIXME: we should provide absolute AND relative mouse position through the Event stack

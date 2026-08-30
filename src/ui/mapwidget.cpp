@@ -763,7 +763,7 @@ void MapWidget::clearMarkerHover()
     onMarkerHover.emit(this, {}, 0, 0);
 }
 
-bool MapWidget::takeMarkerHoverInvalidation()
+bool MapWidget::consumeMarkerHoverInvalidation()
 {
     const bool invalidated = _markerHoverInvalidated;
     _markerHoverInvalidated = false;

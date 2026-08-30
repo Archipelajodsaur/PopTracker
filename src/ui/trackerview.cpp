@@ -773,7 +773,7 @@ void TrackerView::closeInvalidMarkerTooltips()
 {
     for (const auto& pair : _maps) {
         for (auto* map : pair.second) {
-            if (map->takeMarkerHoverInvalidation() && _markerTooltipOwner == map)
+            if (map->consumeMarkerHoverInvalidation() && _markerTooltipOwner == map)
                 closeMarkerTooltip();
         }
     }

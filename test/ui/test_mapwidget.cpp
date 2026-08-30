@@ -555,7 +555,7 @@ TEST(MapWidgetMarker, IconFootprintInvalidatesAnOverlappingHoverGroup)
     widget.onMouseMove.emit(&widget, 103, 44, 0);
     for (int i = 0; i < 1000; ++i) {
         output.render(widget);
-        if (widget.takeMarkerHoverInvalidation())
+        if (widget.consumeMarkerHoverInvalidation())
             return;
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
