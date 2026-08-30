@@ -719,3 +719,32 @@ Icon appearances do not accept `color`. Unrecognized fields are ignored. Wrong f
 out-of-range coordinates, non-positive or unsafe icon sizes, unsupported appearances, and malformed objects are
 ignored without changing existing marker state. Markers are transient UI state: they are cleared by `reset`, are
 not saved, and must be republished after a layout rebuild.
+
+## Host-owned live position markers
+
+Archipelago packs can expose a host-owned live-position contract from `scripts/init.lua`. PopTracker sets
+`LOCATION_TRACKING_HOST = true` before pack initialization when its Archipelago backend is available. Packs may
+use that flag to suppress an older pack-owned subscription and `UiHint` fallback.
+
+```lua
+LOCATION_TRACKING = {
+    api_version = 1,
+    location_setting_key = "LivePosition_{team}_{player}",
+    location_markers = function(value)
+        return {
+            { id = "source", map = "Overworld", x = 100, y = 200, visible = true },
+        }
+    end,
+}
+```
+
+PopTracker resolves `{team}` and `{player}`, subscribes to and retrieves that DataStorage key, and passes each
+complete decoded value to `location_markers`. The callback returns a dense one-indexed sequence. Every visible
+marker requires a stable non-empty `id`, exact map name, and finite image-space `x` and `y`; `visible` defaults to
+true, while false removes that identity. `label` is optional. Returning `nil` or an empty sequence clears the
+player's markers.
+
+The host owns subscriptions, team/player/source namespacing, map moves, removals, reset restoration, and
+disconnect cleanup. Callback errors and malformed top-level results retain the last valid marker snapshot;
+malformed rows are dropped while valid siblings are reconciled. Results are limited to 256 markers, 128 bytes
+for marker IDs and map names, and 512 bytes for labels.

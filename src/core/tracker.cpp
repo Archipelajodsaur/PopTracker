@@ -674,6 +674,8 @@ Tracker::Object Tracker::FindObjectForCode(const char* code)
 void Tracker::UiHint(const std::string& name, const std::string& value)
 {
     onUiHint.emit(this, name, value);
+    if (name == "reset")
+        onPostUiHintReset.emit(this);
 }
 
 bool Tracker::OpenLink(const std::string& url, const std::string& description)

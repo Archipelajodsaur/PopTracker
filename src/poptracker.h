@@ -14,6 +14,7 @@
 #include "core/imagereference.h"
 #include "core/version.h"
 #include "ap/archipelago.h"
+#include "ap/locationtracking.h"
 #include "appupdater/appupdater.hpp"
 #include "packmanager/packmanager.h"
 #include "luasandbox/luapackio.h"
@@ -37,6 +38,7 @@ private:
     Tracker *_tracker = nullptr;
     ScriptHost *_scriptHost = nullptr;
     Archipelago *_archipelago = nullptr;
+    LocationTracking *_locationTracking = nullptr;
     Pack *_pack = nullptr;
     ImageReference _imageReference;
     bool _autoTrackerAllDisabled = false;
